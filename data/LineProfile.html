@@ -176,6 +176,10 @@
   }
   #status b{color:var(--text);font-weight:700;}
   #status.err{color:var(--danger);}
+  #progressBarWrap{margin-top:10px;}
+  #progressBarTrack{height:6px;background:var(--border);border-radius:100px;overflow:hidden;}
+  #progressBarFill{height:100%;width:0%;background:linear-gradient(90deg,#6a6af5,#4f4fe8);border-radius:100px;transition:width .25s ease;}
+  #progressBarLabel{font-size:11px;color:var(--text-dim);margin-top:5px;font-weight:600;}
   .basemap-toggle{display:flex;gap:6px;margin-top:10px;}
   .basemap-toggle button{flex:1;justify-content:center;}
   .seg-toggle{display:flex;border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;flex:none;}
@@ -357,6 +361,10 @@
         <input type="file" id="dxfFileInput" accept=".dxf" style="display:none;">
       </div>
       <div id="status" style="margin-top:12px;">Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.</div>
+      <div id="progressBarWrap" style="display:none;">
+        <div id="progressBarTrack"><div id="progressBarFill"></div></div>
+        <div id="progressBarLabel"></div>
+      </div>
     </div>
 
     <div class="card" id="emptyCard">
@@ -569,6 +577,49 @@ function pathLength(vertices){
   return d;
 }
 
+// Point at a given cumulative distance along a multi-vertex path (linear interpolation
+// between whichever two original vertices straddle that distance).
+function interpolateAlong(vertices, targetDist){
+  let acc = 0;
+  for(let i=1;i<vertices.length;i++){
+    const segLen = haversine(vertices[i-1].lat, vertices[i-1].lng, vertices[i].lat, vertices[i].lng);
+    if(acc + segLen >= targetDist || i === vertices.length-1){
+      const remain = targetDist - acc;
+      const t = segLen > 0 ? Math.min(1, Math.max(0, remain / segLen)) : 0;
+      return {
+        lat: vertices[i-1].lat + (vertices[i].lat - vertices[i-1].lat) * t,
+        lng: vertices[i-1].lng + (vertices[i].lng - vertices[i-1].lng) * t
+      };
+    }
+    acc += segLen;
+  }
+  return vertices[vertices.length-1];
+}
+
+// Splits a path into `chunkCount` equal-length sub-paths (by real distance), preserving
+// every original bend point and keeping consecutive chunks joined at an exact shared point —
+// used to fetch a long line's elevation in pieces so real progress can be shown.
+function splitPolylineIntoChunks(vertices, chunkCount){
+  const total = pathLength(vertices);
+  const boundaries = [];
+  for(let i=0;i<=chunkCount;i++) boundaries.push(interpolateAlong(vertices, total*i/chunkCount));
+  const chunks = [];
+  for(let c=0;c<chunkCount;c++){
+    const startDist = total*c/chunkCount, endDist = total*(c+1)/chunkCount;
+    const chunkPts = [boundaries[c]];
+    let cum = 0;
+    for(let i=1;i<vertices.length;i++){
+      const segLen = haversine(vertices[i-1].lat,vertices[i-1].lng,vertices[i].lat,vertices[i].lng);
+      const cumEnd = cum + segLen;
+      if(cumEnd > startDist && cumEnd < endDist) chunkPts.push(vertices[i]);
+      cum = cumEnd;
+    }
+    chunkPts.push(boundaries[c+1]);
+    chunks.push(chunkPts);
+  }
+  return chunks;
+}
+
 // ---------- map setup ----------
 
 const map = L.map('map', { zoomControl: true, doubleClickZoom: true }).setView([44.389, -79.690], 12);
@@ -760,6 +811,7 @@ function resetAll(){
   if(hitLine){ map.removeLayer(hitLine); hitLine = null; }
   clearEditHandles();
   hideStation();
+  hideProgressBar();
   profile = null;
   chartInstances = [];
   closeModal();
@@ -775,41 +827,111 @@ function resetAll(){
 
 // ---------- elevation query ----------
 
+const progressBarWrap = document.getElementById('progressBarWrap');
+const progressBarFill = document.getElementById('progressBarFill');
+const progressBarLabel = document.getElementById('progressBarLabel');
+
+function showProgressBar(){ progressBarWrap.style.display = ''; setProgressBar(0, 1); }
+function hideProgressBar(){ progressBarWrap.style.display = 'none'; }
+function setProgressBar(done, total){
+  const pct = Math.round(done / total * 100);
+  progressBarFill.style.width = pct + '%';
+  progressBarLabel.textContent = 'Fetching elevation data… ' + pct + '% (' + done + ' of ' + total + ' segments)';
+}
+
+// One getSamples call for a (sub-)line, returning cleaned {lat,lon,elev} points sorted
+// into real path order (the service returns them batched by raster tile, not in order).
+// This government endpoint has turned out to be genuinely flaky under repeated calls (verified
+// directly: identical short-segment requests intermittently 400 or connection-timeout, while the
+// same area as one whole-line request succeeds cleanly) - so failures here are retried with a
+// short backoff before being treated as real.
+async function fetchElevationChunk(chunkVertices, sampleCount, retries){
+  if(retries == null) retries = 2;
+  const geometry = {
+    paths: [ chunkVertices.map(v => [v.lng, v.lat]) ],
+    spatialReference: { wkid: 4326 }
+  };
+  const params = new URLSearchParams({
+    geometry: JSON.stringify(geometry),
+    geometryType: 'esriGeometryPolyline',
+    sampleCount: String(sampleCount),
+    interpolation: 'RSP_BilinearInterpolation',
+    returnFirstValueOnly: 'true',
+    f: 'json'
+  });
+  const url = DTM_URL + '/getSamples?' + params.toString();
+  for(let attempt=0; ; attempt++){
+    try{
+      const res = await fetch(url);
+      const data = await res.json();
+      if(data.error) throw new Error(data.error.message || ('Service error ' + data.error.code));
+      if(!data.samples || !data.samples.length) return [];
+      const samples = data.samples.slice().sort((a,b) => a.locationId - b.locationId);
+      return samples.map(s => {
+        let elev = null;
+        if(s.value !== 'NoData' && s.value != null){
+          const v = parseFloat(s.value);
+          if(isFinite(v) && Math.abs(v) < 1e30) elev = v;
+        }
+        return { lat: s.location.y, lon: s.location.x, elev };
+      });
+    } catch(err){
+      if(attempt >= retries) return null; // exhausted retries — caller treats this as a data gap
+      await new Promise(r => setTimeout(r, 400 * (attempt+1)));
+    }
+  }
+}
+
+let profileRequestId = 0; // lets a newer runProfile() call ignore a still-finishing older one
+
 async function runProfile(){
+  const myRequestId = ++profileRequestId;
   statusEl.className = '';
-  statusEl.innerHTML = 'Fetching elevation data from the Ontario LiDAR DTM…';
+  hideProgressBar();
   try{
     const length = pathLength(vertices);
-    const sampleCount = Math.min(2000, Math.max(20, Math.round(length / 0.5)));
-    const geometry = {
-      paths: [ vertices.map(v => [v.lng, v.lat]) ],
-      spatialReference: { wkid: 4326 }
-    };
-    const params = new URLSearchParams({
-      geometry: JSON.stringify(geometry),
-      geometryType: 'esriGeometryPolyline',
-      sampleCount: String(sampleCount),
-      interpolation: 'RSP_BilinearInterpolation',
-      returnFirstValueOnly: 'true',
-      f: 'json'
-    });
-    const res = await fetch(DTM_URL + '/getSamples?' + params.toString());
-    const data = await res.json();
-    if(data.error) throw new Error(data.error.message || ('Service error ' + data.error.code));
-    if(!data.samples || !data.samples.length) throw new Error('No elevation data returned for this line — it may be outside Ontario or outside LiDAR coverage.');
+    const totalSampleCount = Math.min(2000, Math.max(20, Math.round(length / 0.5)));
+    // Real segments, not a simulated bar: a short line is one request same as always; a long
+    // one is split so genuine per-segment completion drives the percentage shown.
+    const chunkCount = Math.max(1, Math.min(20, Math.ceil(totalSampleCount / 150)));
 
-    const samples = data.samples.slice().sort((a,b) => a.locationId - b.locationId);
-    let cum = 0, prev = null;
-    profile = samples.map(s => {
-      const lat = s.location.y, lon = s.location.x;
-      let elev = null;
-      if(s.value !== 'NoData' && s.value != null){
-        const v = parseFloat(s.value);
-        if(isFinite(v) && Math.abs(v) < 1e30) elev = v;
+    let allPoints, failedChunks = 0;
+    if(chunkCount === 1){
+      statusEl.innerHTML = 'Fetching elevation data from the Ontario LiDAR DTM…';
+      allPoints = await fetchElevationChunk(vertices, totalSampleCount) || [];
+    } else {
+      statusEl.innerHTML = 'Fetching elevation data from the Ontario LiDAR DTM in ' + chunkCount + ' segments…';
+      showProgressBar();
+      const chunks = splitPolylineIntoChunks(vertices, chunkCount);
+      const perChunkCount = Math.max(2, Math.round(totalSampleCount / chunkCount));
+      const results = new Array(chunkCount);
+      let nextIdx = 0, completed = 0;
+      const CONCURRENCY = 3;
+      async function worker(){
+        while(nextIdx < chunkCount){
+          const idx = nextIdx++;
+          const chunkResult = await fetchElevationChunk(chunks[idx], perChunkCount);
+          results[idx] = chunkResult; // null = this segment never came back, even after retries
+          if(myRequestId !== profileRequestId) return; // a newer line superseded this one — stop updating UI
+          completed++;
+          setProgressBar(completed, chunkCount);
+        }
       }
-      if(prev) cum += haversine(prev.lat, prev.lon, lat, lon);
-      prev = { lat, lon };
-      return { dist: cum, lat, lon, elev };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunkCount) }, worker));
+      if(myRequestId !== profileRequestId) return; // superseded while chunks were in flight
+      failedChunks = results.filter(r => r === null).length;
+      allPoints = results.filter(r => r !== null).flat();
+      hideProgressBar();
+    }
+
+    if(myRequestId !== profileRequestId) return;
+    if(!allPoints.length) throw new Error('No elevation data returned for this line — it may be outside Ontario or outside LiDAR coverage, or the elevation service may be temporarily unavailable.');
+
+    let cum = 0, prev = null;
+    profile = allPoints.map(s => {
+      if(prev) cum += haversine(prev.lat, prev.lon, s.lat, s.lon);
+      prev = s;
+      return { dist: cum, lat: s.lat, lon: s.lon, elev: s.elev };
     });
 
     const validCount = profile.filter(p => p.elev != null).length;
@@ -832,8 +954,13 @@ async function runProfile(){
     refreshChart();
     document.getElementById('exportCard').style.display = '';
 
-    statusEl.innerHTML = 'Profile built from <b>' + profile.length + '</b> sample points' + (validCount < profile.length ? ' (' + (profile.length - validCount) + ' gaps, no data)' : '') + '. Hover the line to track a station. Draw a new line, or Clear.';
+    const notes = [];
+    if(validCount < profile.length) notes.push((profile.length - validCount) + ' gaps, no data');
+    if(failedChunks > 0) notes.push(failedChunks + ' of ' + chunkCount + ' segments could not be retrieved after retrying — the elevation service was intermittently unavailable');
+    statusEl.innerHTML = 'Profile built from <b>' + profile.length + '</b> sample points' + (notes.length ? ' (' + notes.join('; ') + ')' : '') + '. Hover the line to track a station. Draw a new line, or Clear.';
   } catch(err){
+    if(myRequestId !== profileRequestId) return; // a newer line already took over — don't show a stale error
+    hideProgressBar();
     statusEl.className = 'err';
     statusEl.textContent = 'Could not build profile: ' + err.message;
   }
