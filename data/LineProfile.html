@@ -788,7 +788,7 @@ async function runProfile(){
       // A thin line is hard to hover precisely, so an invisible wide-stroke twin sits on
       // top purely to catch the mouse — much more forgiving without changing how the line looks.
       if(hitLine) map.removeLayer(hitLine);
-      hitLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:'#000', weight:24, opacity:0 }).addTo(map);
+      hitLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:'#000', weight:60, opacity:0 }).addTo(map);
       hitLine.on('mousemove', onLineHover);
       hitLine.on('mouseout', hideStation);
     }
