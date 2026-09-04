@@ -644,6 +644,34 @@ let hitLine = null;       // invisible wide-stroke polyline for forgiving hover 
 let hoverMarker = null;   // synced marker on chart/map hover
 let profile = null;       // computed profile array
 let lastLength = 0;       // real length in metres, cached for unit re-renders
+let editHandles = [];     // draggable vertex handles shown once a profile exists
+
+const vertexHandleIcon = L.divIcon({
+  className: '',
+  html: '<div style="width:12px;height:12px;border-radius:50%;background:#0d9f6e;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.45);"></div>',
+  iconSize: [12,12],
+  iconAnchor: [6,6]
+});
+
+function buildEditHandles(){
+  clearEditHandles();
+  editHandles = vertices.map((v, idx) => {
+    const m = L.marker([v.lat, v.lng], { icon: vertexHandleIcon, draggable: true }).addTo(map);
+    m.on('drag', (e) => {
+      const ll = e.target.getLatLng();
+      vertices[idx] = { lat: ll.lat, lng: ll.lng };
+      const coords = vertices.map(vv => [vv.lat, vv.lng]);
+      if(drawLine) drawLine.setLatLngs(coords);
+      if(hitLine) hitLine.setLatLngs(coords);
+    });
+    m.on('dragend', () => { runProfile(); });
+    return m;
+  });
+}
+function clearEditHandles(){
+  editHandles.forEach(m => map.removeLayer(m));
+  editHandles = [];
+}
 
 const btnDraw = document.getElementById('btnDraw');
 const btnUndo = document.getElementById('btnUndo');
@@ -709,13 +737,17 @@ async function finishDrawing(){
   btnFinish.disabled = true;
   vertexMarkers.forEach(m => map.removeLayer(m));
   vertexMarkers = [];
+  if(drawLine) map.fitBounds(drawLine.getBounds(), { padding:[50,50] });
 
   await runProfile();
 }
 
+const IDLE_STATUS = 'Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.';
+
 btnClear.addEventListener('click', () => {
+  if(profile && !confirm('Clear this line and its profile? This can\'t be undone.')) return;
   resetAll();
-  statusEl.innerHTML = 'Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.';
+  statusEl.innerHTML = IDLE_STATUS;
 });
 
 function resetAll(){
@@ -726,6 +758,7 @@ function resetAll(){
   vertexMarkers = [];
   if(drawLine){ map.removeLayer(drawLine); drawLine = null; }
   if(hitLine){ map.removeLayer(hitLine); hitLine = null; }
+  clearEditHandles();
   hideStation();
   profile = null;
   chartInstances = [];
@@ -791,6 +824,7 @@ async function runProfile(){
       hitLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:'#000', weight:60, opacity:0 }).addTo(map);
       hitLine.on('mousemove', onLineHover);
       hitLine.on('mouseout', hideStation);
+      buildEditHandles();
     }
 
     document.getElementById('emptyCard').style.display = 'none';
@@ -1216,7 +1250,12 @@ document.getElementById('btnExpandChart').addEventListener('click', () => {
 });
 document.getElementById('btnCloseModal').addEventListener('click', closeModal);
 document.addEventListener('keydown', (e) => {
-  if(e.key === 'Escape' && modalOpen) closeModal();
+  if(e.key !== 'Escape') return;
+  if(modalOpen){ closeModal(); return; }
+  if(drawing){
+    resetAll();
+    statusEl.innerHTML = 'Draw cancelled. ' + IDLE_STATUS;
+  }
 });
 function closeModal(){
   modalOpen = false;
