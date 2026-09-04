@@ -264,17 +264,26 @@
   ::-webkit-scrollbar-thumb{background:#d3d6e2;border-radius:5px;}
   ::-webkit-scrollbar-track{background:transparent;}
   .modal-overlay{
-    position:fixed;inset:0;background:rgba(15,17,30,.5);
-    display:none;align-items:center;justify-content:center;
-    z-index:1000;padding:30px;
+    position:fixed;inset:0;
+    display:none;
+    z-index:1000;
+    pointer-events:none;
   }
   .modal-panel{
+    position:fixed;top:76px;left:32px;
     background:var(--surface);border-radius:16px;box-shadow:var(--shadow-lg);
-    width:min(1150px,95vw);max-height:92vh;overflow-y:auto;padding:22px 24px;
+    border:1px solid var(--border);
+    width:min(820px,90vw);max-height:min(640px,80vh);overflow-y:auto;padding:16px 20px 20px;
+    pointer-events:auto;
   }
-  .modal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap;}
-  .modal-head h3{margin:0;font-size:16px;font-weight:800;}
+  .modal-head{
+    display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap;
+    cursor:move;padding:4px 2px 10px;border-bottom:1px solid var(--border);
+    user-select:none;
+  }
+  .modal-head h3{margin:0;font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px;}
   .modal-head-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .drag-dots{color:var(--text-faint);}
 </style>
 </head>
 <body>
@@ -335,6 +344,17 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           Clear
         </button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <select id="dxfZone">
+          <option value="26917">UTM Zone 17N (NAD83)</option>
+          <option value="26918">UTM Zone 18N (NAD83)</option>
+        </select>
+        <button id="btnImportDxf">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 4h11l5 5v11a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 4v6h6" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 16l3-3 2 2 3-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Import Line from CAD (DXF)
+        </button>
+        <input type="file" id="dxfFileInput" accept=".dxf" style="display:none;">
       </div>
       <div id="status" style="margin-top:12px;">Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.</div>
     </div>
@@ -447,8 +467,11 @@
 
 <div class="modal-overlay" id="chartModal">
   <div class="modal-panel">
-    <div class="modal-head">
-      <h3>Elevation Profile</h3>
+    <div class="modal-head" id="modalDragHandle">
+      <h3>
+        <svg class="drag-dots" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.6"/><circle cx="16" cy="6" r="1.6"/><circle cx="8" cy="12" r="1.6"/><circle cx="16" cy="12" r="1.6"/><circle cx="8" cy="18" r="1.6"/><circle cx="16" cy="18" r="1.6"/></svg>
+        Elevation Profile
+      </h3>
       <div class="modal-head-right">
         <select class="ve-select">
           <option value="auto">Auto scale</option>
@@ -475,8 +498,12 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
 <script>
 'use strict';
+
+proj4.defs('EPSG:26917', '+proj=utm +zone=17 +datum=NAD83 +units=m +no_defs +type=crs');
+proj4.defs('EPSG:26918', '+proj=utm +zone=18 +datum=NAD83 +units=m +no_defs +type=crs');
 
 const DTM_URL = 'https://ws.geoservices.lrc.gov.on.ca/arcgis5/rest/services/Elevation/Ontario_DTM_LidarDerived/ImageServer';
 const M_TO_FT = 3.28084;
@@ -612,7 +639,8 @@ document.getElementById('searchBox').addEventListener('keydown', async (e) => {
 let drawing = false;
 let vertices = [];       // {lat,lng}
 let vertexMarkers = [];
-let drawLine = null;      // L.Polyline while drawing / final result
+let drawLine = null;      // L.Polyline while drawing / final result (visual only once finished)
+let hitLine = null;       // invisible wide-stroke polyline for forgiving hover detection
 let hoverMarker = null;   // synced marker on chart/map hover
 let profile = null;       // computed profile array
 let lastLength = 0;       // real length in metres, cached for unit re-renders
@@ -697,6 +725,7 @@ function resetAll(){
   vertexMarkers.forEach(m => map.removeLayer(m));
   vertexMarkers = [];
   if(drawLine){ map.removeLayer(drawLine); drawLine = null; }
+  if(hitLine){ map.removeLayer(hitLine); hitLine = null; }
   hideStation();
   profile = null;
   chartInstances = [];
@@ -756,8 +785,12 @@ async function runProfile(){
     lastLength = length;
     if(drawLine){
       drawLine.setStyle({ color: PALETTE.doneLine, dashArray: null });
-      drawLine.on('mousemove', onLineHover);
-      drawLine.on('mouseout', hideStation);
+      // A thin line is hard to hover precisely, so an invisible wide-stroke twin sits on
+      // top purely to catch the mouse — much more forgiving without changing how the line looks.
+      if(hitLine) map.removeLayer(hitLine);
+      hitLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:'#000', weight:24, opacity:0 }).addTo(map);
+      hitLine.on('mousemove', onLineHover);
+      hitLine.on('mouseout', hideStation);
     }
 
     document.getElementById('emptyCard').style.display = 'none';
@@ -787,6 +820,130 @@ function nearestProfileIndex(lat, lon){
   }
   return bestIdx;
 }
+
+// ---------- import line from CAD (DXF) ----------
+
+function parseDXF(text){
+  const lines = text.split(/\r\n|\r|\n/);
+  const pairs = [];
+  for(let i=0;i+1<lines.length;i+=2){
+    const code = parseInt(lines[i].trim(), 10);
+    if(isNaN(code)) continue;
+    pairs.push([code, lines[i+1].trim()]);
+  }
+  const polylines = [];
+  const lineSegs = [];
+  let i = 0;
+  while(i < pairs.length){
+    const [code, val] = pairs[i];
+    if(code === 0 && val === 'LWPOLYLINE'){
+      const verts = [];
+      let j = i + 1, curX = null;
+      while(j < pairs.length && pairs[j][0] !== 0){
+        const [c, v] = pairs[j];
+        if(c === 10) curX = parseFloat(v);
+        else if(c === 20 && curX !== null){ verts.push({x: curX, y: parseFloat(v)}); curX = null; }
+        j++;
+      }
+      if(verts.length >= 2) polylines.push(verts);
+      i = j;
+      continue;
+    }
+    if(code === 0 && val === 'LINE'){
+      let j = i + 1, x1=null, y1=null, x2=null, y2=null;
+      while(j < pairs.length && pairs[j][0] !== 0){
+        const [c, v] = pairs[j];
+        if(c === 10) x1 = parseFloat(v);
+        else if(c === 20) y1 = parseFloat(v);
+        else if(c === 11) x2 = parseFloat(v);
+        else if(c === 21) y2 = parseFloat(v);
+        j++;
+      }
+      if(x1!=null && y1!=null && x2!=null && y2!=null) lineSegs.push({a:{x:x1,y:y1}, b:{x:x2,y:y2}});
+      i = j;
+      continue;
+    }
+    i++;
+  }
+  return { polylines, lineSegs };
+}
+
+function polyLen2D(pts){
+  let d = 0;
+  for(let i=1;i<pts.length;i++) d += Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);
+  return d;
+}
+
+// Most alignments export as one LWPOLYLINE, but some CAD tools explode it into separate
+// LINE entities — chain those end-to-end (matching endpoints within a small tolerance)
+// and keep whichever resulting chain is longest.
+function chainLineSegments(segs){
+  const tol = 0.05;
+  const samePt = (a,b) => Math.hypot(a.x-b.x, a.y-b.y) <= tol;
+  let best = [];
+  for(let start=0; start<segs.length; start++){
+    let chain = [segs[start].a, segs[start].b];
+    const used = new Set([start]);
+    let extended = true;
+    while(extended){
+      extended = false;
+      for(let i=0;i<segs.length;i++){
+        if(used.has(i)) continue;
+        const s = segs[i];
+        if(samePt(chain[chain.length-1], s.a)){ chain.push(s.b); used.add(i); extended=true; }
+        else if(samePt(chain[chain.length-1], s.b)){ chain.push(s.a); used.add(i); extended=true; }
+        else if(samePt(chain[0], s.a)){ chain.unshift(s.b); used.add(i); extended=true; }
+        else if(samePt(chain[0], s.b)){ chain.unshift(s.a); used.add(i); extended=true; }
+      }
+    }
+    if(polyLen2D(chain) > polyLen2D(best)) best = chain;
+  }
+  return best;
+}
+
+document.getElementById('btnImportDxf').addEventListener('click', () => {
+  document.getElementById('dxfFileInput').click();
+});
+document.getElementById('dxfFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  statusEl.className = '';
+  statusEl.innerHTML = 'Reading ' + file.name + '…';
+  try{
+    const text = await file.text();
+    const zoneEpsg = 'EPSG:' + document.getElementById('dxfZone').value;
+    const parsed = parseDXF(text);
+    let bestPts = null;
+    if(parsed.polylines.length){
+      bestPts = parsed.polylines.reduce((a,b) => polyLen2D(b) > polyLen2D(a) ? b : a);
+    } else if(parsed.lineSegs.length){
+      bestPts = chainLineSegments(parsed.lineSegs);
+    }
+    if(!bestPts || bestPts.length < 2){
+      throw new Error('No LWPOLYLINE or LINE entities found in this DXF (legacy POLYLINE/VERTEX entities aren\'t supported yet).');
+    }
+
+    const converted = bestPts.map(p => {
+      const [lon, lat] = proj4(zoneEpsg, 'WGS84', [p.x, p.y]);
+      return { lat, lng: lon };
+    });
+    const outOfCanada = converted.some(v => v.lat < 40 || v.lat > 85 || v.lng < -145 || v.lng > -50);
+    if(outOfCanada){
+      throw new Error('Converted coordinates don\'t land in Canada — this DXF likely uses a local/arbitrary coordinate system rather than real-world UTM, or try the other zone.');
+    }
+
+    resetAll();
+    vertices = converted;
+    drawLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:PALETTE.drawLine, weight:3.5 }).addTo(map);
+    map.fitBounds(drawLine.getBounds(), { padding:[50,50] });
+    statusEl.innerHTML = 'Imported ' + vertices.length + ' points from ' + file.name + '. Building profile…';
+    await runProfile();
+  } catch(err){
+    statusEl.className = 'err';
+    statusEl.textContent = 'DXF import failed: ' + err.message;
+  }
+});
 
 // ---------- stats ----------
 
@@ -1054,13 +1211,10 @@ window.addEventListener('resize', () => {
 let modalOpen = false;
 document.getElementById('btnExpandChart').addEventListener('click', () => {
   modalOpen = true;
-  document.getElementById('chartModal').style.display = 'flex';
+  document.getElementById('chartModal').style.display = 'block';
   refreshChart();
 });
 document.getElementById('btnCloseModal').addEventListener('click', closeModal);
-document.getElementById('chartModal').addEventListener('click', (e) => {
-  if(e.target.id === 'chartModal') closeModal();
-});
 document.addEventListener('keydown', (e) => {
   if(e.key === 'Escape' && modalOpen) closeModal();
 });
@@ -1068,6 +1222,35 @@ function closeModal(){
   modalOpen = false;
   document.getElementById('chartModal').style.display = 'none';
 }
+
+// The expanded panel floats over the map (no blocking backdrop) so the drawn line stays
+// hoverable and the station tracker keeps working while it's open — drag it anywhere,
+// including off to the side, by its header.
+function makeDraggable(panel, handle){
+  let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+  handle.addEventListener('mousedown', (e) => {
+    if(e.target.closest('button, select')) return;
+    const rect = panel.getBoundingClientRect();
+    panel.style.left = rect.left + 'px';
+    panel.style.top = rect.top + 'px';
+    panel.style.right = 'auto';
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    startLeft = rect.left; startTop = rect.top;
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if(!dragging) return;
+    let nx = startLeft + (e.clientX - startX);
+    let ny = startTop + (e.clientY - startY);
+    nx = Math.max(0, Math.min(nx, window.innerWidth - panel.offsetWidth));
+    ny = Math.max(0, Math.min(ny, window.innerHeight - panel.offsetHeight));
+    panel.style.left = nx + 'px';
+    panel.style.top = ny + 'px';
+  });
+  document.addEventListener('mouseup', () => { dragging = false; });
+}
+makeDraggable(document.querySelector('.modal-panel'), document.getElementById('modalDragHandle'));
 
 // ---------- export ----------
 
@@ -1088,30 +1271,149 @@ document.getElementById('btnExportCsv').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+function roundRectPath(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+// Standalone chart SVG built specifically for export (axis titles, bigger fixed size) —
+// independent of whichever on-screen chart (sidebar/expanded) happens to be visible.
+function buildExportChartSVG(prof, w, h){
+  const pad = { l:72, r:24, t:20, b:52 };
+  const elevsM = prof.filter(p=>p.elev!=null).map(p=>p.elev);
+  const realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
+  const spanM = Math.max(realMax - realMin, 0.5);
+  const yPad = spanM * 0.08;
+  const yMinM = realMin - yPad, yMaxM = realMax + yPad;
+  const xMinM = 0, xMaxM = prof[prof.length-1].dist || 1;
+  const X = d => pad.l + (d - xMinM) / (xMaxM - xMinM) * (w - pad.l - pad.r);
+  const Y = e => pad.t + (1 - (e - yMinM) / (yMaxM - yMinM)) * (h - pad.t - pad.b);
+
+  let svg = '<svg xmlns="' + NS + '" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">';
+  svg += '<rect width="' + w + '" height="' + h + '" fill="#fafbfd"/>';
+  for(let i=0;i<=4;i++){
+    const eM = yMinM + (yMaxM - yMinM) * i / 4;
+    const y = Y(eM);
+    svg += '<line x1="' + pad.l + '" x2="' + (w-pad.r) + '" y1="' + y + '" y2="' + y + '" stroke="' + PALETTE.gridLine + '" stroke-width="1"/>';
+    svg += '<text x="' + (pad.l-10) + '" y="' + (y+4) + '" text-anchor="end" font-size="12" font-family="JetBrains Mono, monospace" fill="' + PALETTE.axisText + '">' + elevValue(eM).toFixed(1) + '</text>';
+  }
+  for(let i=0;i<=5;i++){
+    const dM = xMinM + (xMaxM - xMinM) * i / 5;
+    const x = X(dM);
+    svg += '<text x="' + x + '" y="' + (h-pad.b+22) + '" text-anchor="' + (i===0?'start':(i===5?'end':'middle')) + '" font-size="12" font-family="JetBrains Mono, monospace" fill="' + PALETTE.axisText + '">' + fmtDist(dM) + '</text>';
+  }
+  let dPath='', aPath='', open=false;
+  prof.forEach(p => {
+    if(p.elev == null){ open = false; return; }
+    const x = X(p.dist), y = Y(p.elev);
+    if(!open){ dPath += 'M'+x.toFixed(1)+','+y.toFixed(1)+' '; aPath += 'M'+x.toFixed(1)+','+Y(yMinM).toFixed(1)+' L'+x.toFixed(1)+','+y.toFixed(1)+' '; open = true; }
+    else { dPath += 'L'+x.toFixed(1)+','+y.toFixed(1)+' '; aPath += 'L'+x.toFixed(1)+','+y.toFixed(1)+' '; }
+  });
+  svg += '<defs><linearGradient id="expGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="' + PALETTE.accent + '" stop-opacity="0.28"/><stop offset="100%" stop-color="' + PALETTE.accent + '" stop-opacity="0.02"/></linearGradient></defs>';
+  svg += '<path d="' + aPath + '" fill="url(#expGrad)" stroke="none"/>';
+  svg += '<path d="' + dPath + '" fill="none" stroke="' + PALETTE.accentDark + '" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>';
+  svg += '<line x1="' + pad.l + '" x2="' + (w-pad.r) + '" y1="' + (h-pad.b) + '" y2="' + (h-pad.b) + '" stroke="' + PALETTE.axisLine + '" stroke-width="1"/>';
+  const xUnit = unitSystem === 'imperial' ? 'ft / mi' : 'm / km';
+  const yUnit = unitSystem === 'imperial' ? 'ft' : 'm';
+  const midX = pad.l + (w-pad.l-pad.r)/2, midY = pad.t + (h-pad.t-pad.b)/2;
+  svg += '<text x="' + midX + '" y="' + (h-14) + '" text-anchor="middle" font-size="13" font-weight="700" font-family="Inter, sans-serif" fill="' + PALETTE.text + '">Distance (' + xUnit + ')</text>';
+  svg += '<text x="18" y="' + midY + '" text-anchor="middle" font-size="13" font-weight="700" font-family="Inter, sans-serif" fill="' + PALETTE.text + '" transform="rotate(-90 18 ' + midY + ')">Elevation (' + yUnit + ')</text>';
+  svg += '</svg>';
+  return svg;
+}
+
 document.getElementById('btnExportPng').addEventListener('click', () => {
-  const svg = (modalOpen ? document.querySelector('#modalChartWrap svg') : document.querySelector('#chartWrap svg'));
-  if(!svg) return;
+  if(!profile) return;
   const scale = 2;
-  const w = parseInt(svg.getAttribute('width'), 10);
-  const h = parseInt(svg.getAttribute('height'), 10);
-  const svgData = new XMLSerializer().serializeToString(svg);
-  const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+  const chartW = 860, chartH = 360;
+  const svgStr = buildExportChartSVG(profile, chartW, chartH);
+  const svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(svgBlob);
   const img = new Image();
   img.onload = () => {
+    const padOuter = 36, headerH = 62, statsH = 52, footerH = 40;
+    const totalW = chartW + padOuter*2;
+    const totalH = headerH + statsH + chartH + footerH + padOuter*2;
     const canvas = document.createElement('canvas');
-    canvas.width = w * scale; canvas.height = h * scale;
+    canvas.width = totalW * scale; canvas.height = totalH * scale;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fafbfd';
-    ctx.fillRect(0,0,canvas.width, canvas.height);
     ctx.scale(scale, scale);
-    ctx.drawImage(img, 0, 0);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, totalW, totalH);
+    ctx.strokeStyle = '#e7e9f2'; ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, totalW-1, totalH-1);
+
+    let y = padOuter;
+    ctx.fillStyle = '#4747d6';
+    roundRectPath(ctx, padOuter, y, 34, 34, 9); ctx.fill();
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.3; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(padOuter+8, y+25); ctx.lineTo(padOuter+13, y+16); ctx.lineTo(padOuter+17, y+20);
+    ctx.lineTo(padOuter+22, y+12); ctx.lineTo(padOuter+26, y+17);
+    ctx.stroke();
+
+    ctx.fillStyle = '#161824';
+    ctx.font = '800 19px Inter, sans-serif';
+    ctx.fillText('Contour', padOuter+44, y+17);
+    ctx.fillStyle = '#6b7080';
+    ctx.font = '500 12px Inter, sans-serif';
+    ctx.fillText('Elevation Profile', padOuter+44, y+32);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#9599a8';
+    ctx.font = '500 11px Inter, sans-serif';
+    ctx.fillText(new Date().toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'}), totalW-padOuter, y+20);
+    ctx.textAlign = 'left';
+
+    y += headerH;
+    const elevs = profile.filter(p=>p.elev!=null);
+    const first = elevs[0], last = elevs[elevs.length-1];
+    let minP=elevs[0], maxP=elevs[0];
+    for(const p of elevs){ if(p.elev<minP.elev) minP=p; if(p.elev>maxP.elev) maxP=p; }
+    const netGrade = lastLength>0 ? ((last.elev-first.elev)/lastLength*100) : 0;
+    const statList = [
+      ['LENGTH', fmtDist(lastLength)],
+      ['START', fmtElev(first.elev)],
+      ['END', fmtElev(last.elev)],
+      ['MIN', fmtElev(minP.elev)],
+      ['MAX', fmtElev(maxP.elev)],
+      ['NET GRADE', netGrade.toFixed(2)+'%']
+    ];
+    const colW = chartW / statList.length;
+    statList.forEach(([label,value], i) => {
+      const x = padOuter + colW*i;
+      ctx.fillStyle = '#9599a8';
+      ctx.font = '700 10px Inter, sans-serif';
+      ctx.fillText(label, x, y+8);
+      ctx.fillStyle = '#161824';
+      ctx.font = '700 15px "JetBrains Mono", monospace';
+      ctx.fillText(value, x, y+28);
+    });
+    ctx.strokeStyle = '#e7e9f2';
+    ctx.beginPath(); ctx.moveTo(padOuter, y+statsH-8); ctx.lineTo(padOuter+chartW, y+statsH-8); ctx.stroke();
+
+    y += statsH;
+    ctx.drawImage(img, padOuter, y, chartW, chartH);
+    y += chartH + 18;
+
+    ctx.fillStyle = '#9599a8';
+    ctx.font = '500 10.5px Inter, sans-serif';
+    const veText = veMode === 'auto' ? '' : (' · Vertical exaggeration ' + veMode + '×');
+    ctx.fillText('Vertical datum: CGVD2013 · Horizontal: WGS84 (EPSG:4326)' + veText, padOuter, y);
+    ctx.fillText('Ground elevation: Ontario LiDAR DTM (LIO) · Generated with Contour', padOuter, y+15);
+
     URL.revokeObjectURL(url);
     canvas.toBlob((blob) => {
       const pngUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = pngUrl;
-      a.download = 'line-profile-chart-' + Date.now() + '.png';
+      a.download = 'contour-elevation-profile-' + Date.now() + '.png';
       a.click();
       URL.revokeObjectURL(pngUrl);
     }, 'image/png');
