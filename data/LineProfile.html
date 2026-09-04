@@ -113,6 +113,8 @@
     margin:0 0 12px 0;
     font-weight:700;
   }
+  .card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap;}
+  .card-head h2{margin:0;}
   .row{display:flex;gap:8px;flex-wrap:wrap;}
   button{
     font-family:var(--font-ui);
@@ -140,6 +142,7 @@
   button.danger{background:var(--surface);border-color:var(--border-strong);color:var(--danger);}
   button.danger:hover{background:var(--danger-soft);border-color:#f3b9b3;}
   button.ghost-active{background:var(--accent-soft);border-color:#c9c9fb;color:var(--accent-dark);}
+  button.icon-btn{padding:7px;}
   input[type=text]{
     font-family:var(--font-ui);
     font-size:13.5px;
@@ -152,6 +155,18 @@
   }
   input[type=text]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
   input[type=text]::placeholder{color:var(--text-faint);}
+  select{
+    font-family:var(--font-ui);
+    font-size:12.5px;
+    font-weight:600;
+    color:var(--text);
+    background:var(--surface);
+    border:1px solid var(--border-strong);
+    border-radius:var(--radius-sm);
+    padding:7px 10px;
+    cursor:pointer;
+  }
+  select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
   .search-wrap{position:relative;}
   .search-wrap svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-faint);}
   #status{
@@ -163,6 +178,10 @@
   #status.err{color:var(--danger);}
   .basemap-toggle{display:flex;gap:6px;margin-top:10px;}
   .basemap-toggle button{flex:1;justify-content:center;}
+  .seg-toggle{display:flex;border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;flex:none;}
+  .seg-toggle button{border:none;border-radius:0;padding:6px 10px;font-size:11.5px;background:var(--surface);}
+  .seg-toggle button.ghost-active{background:var(--accent-soft);color:var(--accent-dark);}
+  .seg-toggle button + button{border-left:1px solid var(--border-strong);}
   .stats-grid{
     display:grid;
     grid-template-columns:1fr 1fr;
@@ -181,13 +200,14 @@
   .stat .value{font-family:var(--font-mono);font-size:14.5px;font-weight:600;color:var(--text);}
   .stat .value.rise{color:var(--accent-dark);}
   .stat .value.fall{color:var(--success);}
-  #chartWrap{
+  .chart-controls{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
+  #chartWrap, .modal-chart-wrap{
     background:var(--surface-2);
     border-radius:10px;
     border:1px solid var(--border);
     position:relative;
   }
-  #chartTooltip{
+  .chart-tooltip{
     position:absolute;
     pointer-events:none;
     background:var(--text);
@@ -201,6 +221,7 @@
     z-index:5;
     box-shadow:var(--shadow-md);
   }
+  .datum-note{font-size:10.5px;color:var(--text-faint);margin-top:9px;line-height:1.5;}
   .empty-hint{
     display:flex;
     flex-direction:column;
@@ -242,6 +263,18 @@
   ::-webkit-scrollbar{width:9px;}
   ::-webkit-scrollbar-thumb{background:#d3d6e2;border-radius:5px;}
   ::-webkit-scrollbar-track{background:transparent;}
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(15,17,30,.5);
+    display:none;align-items:center;justify-content:center;
+    z-index:1000;padding:30px;
+  }
+  .modal-panel{
+    background:var(--surface);border-radius:16px;box-shadow:var(--shadow-lg);
+    width:min(1150px,95vw);max-height:92vh;overflow-y:auto;padding:22px 24px;
+  }
+  .modal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap;}
+  .modal-head h3{margin:0;font-size:16px;font-weight:800;}
+  .modal-head-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 </style>
 </head>
 <body>
@@ -303,7 +336,7 @@
           Clear
         </button>
       </div>
-      <div id="status" style="margin-top:12px;">Click points on the map to trace a route, then Finish.</div>
+      <div id="status" style="margin-top:12px;">Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.</div>
     </div>
 
     <div class="card" id="emptyCard">
@@ -320,15 +353,37 @@
     </div>
 
     <div class="card" id="statsCard" style="display:none;">
-      <h2>Profile Summary</h2>
+      <div class="card-head">
+        <h2>Profile Summary</h2>
+        <div class="seg-toggle unit-toggle">
+          <button data-unit="metric" class="ghost-active">m</button>
+          <button data-unit="imperial">ft</button>
+        </div>
+      </div>
       <div class="stats-grid" id="statsGrid"></div>
     </div>
 
     <div class="card" id="chartCard" style="display:none;">
-      <h2>Elevation Profile</h2>
-      <div id="chartWrap">
-        <div id="chartTooltip"></div>
+      <div class="card-head">
+        <h2>Elevation Profile</h2>
+        <button id="btnExpandChart" class="icon-btn" title="Expand">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
       </div>
+      <div class="chart-controls">
+        <select class="ve-select">
+          <option value="auto">Auto scale</option>
+          <option value="1">1× (true scale)</option>
+          <option value="2">2× exaggeration</option>
+          <option value="5">5× exaggeration</option>
+          <option value="10">10× exaggeration</option>
+          <option value="20">20× exaggeration</option>
+        </select>
+      </div>
+      <div id="chartWrap">
+        <div class="chart-tooltip" id="chartTooltip"></div>
+      </div>
+      <div class="datum-note" id="datumNote"></div>
     </div>
 
     <div class="card" id="exportCard" style="display:none;">
@@ -363,6 +418,13 @@
           </div>
         </div>
         <div class="source-item">
+          <div class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 2v20M2 12h20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+          <div>
+            <div class="name">Datum &amp; Reference System</div>
+            <div class="desc">Vertical: <b>CGVD2013</b> (Canadian Geodetic Vertical Datum of 2013, gravity-related height, metres) — from the DTM service's own published metadata. Horizontal: <b>WGS84</b> (EPSG:4326); the DTM's native raster is stored in Web Mercator (EPSG:3857).</div>
+          </div>
+        </div>
+        <div class="source-item">
           <div class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M9 20l-6-2V4l6 2m0 14l6-2m-6 2V6m6 12l6 2V6l-6-2m0 16V4m0 2L9 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
           <div>
             <div class="name">Street Map</div>
@@ -383,13 +445,42 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="chartModal">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <h3>Elevation Profile</h3>
+      <div class="modal-head-right">
+        <select class="ve-select">
+          <option value="auto">Auto scale</option>
+          <option value="1">1× (true scale)</option>
+          <option value="2">2× exaggeration</option>
+          <option value="5">5× exaggeration</option>
+          <option value="10">10× exaggeration</option>
+          <option value="20">20× exaggeration</option>
+        </select>
+        <div class="seg-toggle unit-toggle">
+          <button data-unit="metric" class="ghost-active">m</button>
+          <button data-unit="imperial">ft</button>
+        </div>
+        <button id="btnCloseModal" class="icon-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="modal-chart-wrap" id="modalChartWrap">
+      <div class="chart-tooltip" id="modalChartTooltip"></div>
+    </div>
+    <div class="datum-note" id="modalDatumNote"></div>
+  </div>
+</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 'use strict';
 
 const DTM_URL = 'https://ws.geoservices.lrc.gov.on.ca/arcgis5/rest/services/Elevation/Ontario_DTM_LidarDerived/ImageServer';
+const M_TO_FT = 3.28084;
 
-// ---------- palette (kept in sync with CSS custom properties) ----------
 const PALETTE = {
   accent: '#5b5bf0',
   accentDark: '#4747d6',
@@ -402,6 +493,35 @@ const PALETTE = {
   hoverCross: '#b7bbd6',
   text: '#161824'
 };
+
+// ---------- unit / scale state ----------
+
+let unitSystem = 'metric'; // 'metric' | 'imperial'
+let veMode = 'auto';       // 'auto' | '1' | '2' | '5' | '10' | '20'
+
+function distValue(m){ return unitSystem === 'imperial' ? m * M_TO_FT : m; }
+function elevValue(m){ return unitSystem === 'imperial' ? m * M_TO_FT : m; }
+
+function fmtDist(m){
+  if(unitSystem === 'imperial'){
+    const ft = m * M_TO_FT;
+    return ft >= 5280 ? (ft/5280).toFixed(3) + ' mi' : ft.toFixed(1) + ' ft';
+  }
+  return m >= 1000 ? (m/1000).toFixed(3) + ' km' : m.toFixed(1) + ' m';
+}
+function fmtElev(m){
+  if(m == null || !isFinite(m)) return '—';
+  return unitSystem === 'imperial' ? (m * M_TO_FT).toFixed(2) + ' ft' : m.toFixed(2) + ' m';
+}
+// Engineering station notation (0+000 = start), metres only — imperial stationing
+// conventions vary by agency, so imperial mode falls back to plain distance.
+function fmtStation(m){
+  if(unitSystem === 'imperial') return fmtDist(m);
+  let km = Math.floor(m / 1000);
+  let rem = Math.round(m - km * 1000);
+  if(rem >= 1000){ rem -= 1000; km += 1; }
+  return 'STA ' + km + '+' + String(rem).padStart(3,'0');
+}
 
 // ---------- geometry helpers ----------
 
@@ -420,13 +540,6 @@ function pathLength(vertices){
     d += haversine(vertices[i-1].lat, vertices[i-1].lng, vertices[i].lat, vertices[i].lng);
   }
   return d;
-}
-
-function fmtDist(m){
-  return m >= 1000 ? (m/1000).toFixed(3) + ' km' : m.toFixed(1) + ' m';
-}
-function fmtElev(m){
-  return (m == null || !isFinite(m)) ? '—' : m.toFixed(2) + ' m';
 }
 
 // ---------- map setup ----------
@@ -459,20 +572,32 @@ function setActiveBase(which){
   document.getElementById('btnBaseAerial').classList.toggle('ghost-active', which==='aerial');
 }
 
-// ---------- search ----------
+// ---------- search (with result pin) ----------
+
+const pinIcon = L.divIcon({
+  className: '',
+  html: '<svg width="26" height="34" viewBox="0 0 28 36" fill="none"><path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 22 14 22s14-11.5 14-22C28 6.3 21.7 0 14 0z" fill="#4747d6"/><circle cx="14" cy="14" r="5.5" fill="#fff"/></svg>',
+  iconSize: [26,34],
+  iconAnchor: [13,34],
+  popupAnchor: [0,-30]
+});
+let searchMarker = null;
 
 document.getElementById('searchBox').addEventListener('keydown', async (e) => {
   if(e.key !== 'Enter') return;
   const q = e.target.value.trim();
   if(!q) return;
-  const statusEl = document.getElementById('status');
   const prevStatus = statusEl.innerHTML;
   statusEl.innerHTML = 'Searching…';
   try{
     const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
     const data = await res.json();
     if(data && data[0]){
-      map.setView([parseFloat(data[0].lat), parseFloat(data[0].lon)], 15);
+      const lat = parseFloat(data[0].lat), lon = parseFloat(data[0].lon);
+      map.setView([lat, lon], 15);
+      if(searchMarker) map.removeLayer(searchMarker);
+      const label = data[0].display_name.split(',').slice(0,3).join(',');
+      searchMarker = L.marker([lat, lon], { icon: pinIcon }).addTo(map).bindPopup(label).openPopup();
       statusEl.innerHTML = prevStatus;
     } else {
       statusEl.innerHTML = 'No results for "' + q.replace(/</g,'&lt;') + '".';
@@ -488,8 +613,9 @@ let drawing = false;
 let vertices = [];       // {lat,lng}
 let vertexMarkers = [];
 let drawLine = null;      // L.Polyline while drawing / final result
-let hoverMarker = null;   // synced marker on chart hover
+let hoverMarker = null;   // synced marker on chart/map hover
 let profile = null;       // computed profile array
+let lastLength = 0;       // real length in metres, cached for unit re-renders
 
 const btnDraw = document.getElementById('btnDraw');
 const btnUndo = document.getElementById('btnUndo');
@@ -561,7 +687,7 @@ async function finishDrawing(){
 
 btnClear.addEventListener('click', () => {
   resetAll();
-  statusEl.innerHTML = 'Click points on the map to trace a route, then Finish.';
+  statusEl.innerHTML = 'Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.';
 });
 
 function resetAll(){
@@ -571,8 +697,10 @@ function resetAll(){
   vertexMarkers.forEach(m => map.removeLayer(m));
   vertexMarkers = [];
   if(drawLine){ map.removeLayer(drawLine); drawLine = null; }
-  if(hoverMarker){ map.removeLayer(hoverMarker); hoverMarker = null; }
+  hideStation();
   profile = null;
+  chartInstances = [];
+  closeModal();
   btnDraw.classList.remove('active');
   btnUndo.disabled = true;
   btnFinish.disabled = true;
@@ -625,18 +753,39 @@ async function runProfile(){
     const validCount = profile.filter(p => p.elev != null).length;
     if(validCount === 0) throw new Error('No valid elevation values along this line (outside LiDAR coverage).');
 
-    if(drawLine){ drawLine.setStyle({ color: PALETTE.doneLine, dashArray: null }); }
+    lastLength = length;
+    if(drawLine){
+      drawLine.setStyle({ color: PALETTE.doneLine, dashArray: null });
+      drawLine.on('mousemove', onLineHover);
+      drawLine.on('mouseout', hideStation);
+    }
 
     document.getElementById('emptyCard').style.display = 'none';
     renderStats(profile, length);
-    renderChart(profile);
+    refreshChart();
     document.getElementById('exportCard').style.display = '';
 
-    statusEl.innerHTML = 'Profile built from <b>' + profile.length + '</b> sample points' + (validCount < profile.length ? ' (' + (profile.length - validCount) + ' gaps, no data)' : '') + '. Draw a new line, or Clear.';
+    statusEl.innerHTML = 'Profile built from <b>' + profile.length + '</b> sample points' + (validCount < profile.length ? ' (' + (profile.length - validCount) + ' gaps, no data)' : '') + '. Hover the line to track a station. Draw a new line, or Clear.';
   } catch(err){
     statusEl.className = 'err';
     statusEl.textContent = 'Could not build profile: ' + err.message;
   }
+}
+
+function onLineHover(e){
+  if(!profile) return;
+  const idx = nearestProfileIndex(e.latlng.lat, e.latlng.lng);
+  showStation(idx, /*fromMap*/ true);
+}
+
+function nearestProfileIndex(lat, lon){
+  let bestIdx = 0, best = Infinity;
+  for(let i=0;i<profile.length;i++){
+    const dLat = profile[i].lat - lat, dLon = profile[i].lon - lon;
+    const d = dLat*dLat + dLon*dLon;
+    if(d < best){ best = d; bestIdx = i; }
+  }
+  return bestIdx;
 }
 
 // ---------- stats ----------
@@ -673,26 +822,75 @@ function renderStats(prof, length){
   document.getElementById('statsCard').style.display = '';
 }
 
+// ---------- unit / scale controls ----------
+
+document.querySelectorAll('.unit-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => setUnit(btn.dataset.unit));
+});
+document.querySelectorAll('.ve-select').forEach(sel => {
+  sel.addEventListener('change', (e) => setVE(e.target.value));
+});
+
+function setUnit(sys){
+  unitSystem = sys;
+  document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === sys));
+  if(profile){ renderStats(profile, lastLength); refreshChart(); }
+}
+function setVE(v){
+  veMode = v;
+  document.querySelectorAll('.ve-select').forEach(s => { s.value = v; });
+  refreshChart();
+}
+
 // ---------- chart ----------
 
 const NS = 'http://www.w3.org/2000/svg';
-let chartState = null; // {pad, w, h, xMin, xMax, yMin, yMax, prof}
+let chartInstances = []; // [{svg, cross, dot, tooltip, X, Y, w, h}] — reset on every refresh
 
-function renderChart(prof){
-  const wrap = document.getElementById('chartWrap');
+function refreshChart(){
+  if(!profile) return;
+  chartInstances = [];
+  renderChartInto(profile, document.getElementById('chartWrap'), document.getElementById('chartTooltip'), false);
+  if(modalOpen){
+    renderChartInto(profile, document.getElementById('modalChartWrap'), document.getElementById('modalChartTooltip'), true);
+  }
+  updateDatumNote();
+  document.getElementById('chartCard').style.display = '';
+}
+
+function updateDatumNote(){
+  const veText = veMode === 'auto' ? '' : (' · Vertical exaggeration: ' + veMode + '×');
+  const text = 'Vertical datum: CGVD2013 (gravity-related height) · Horizontal: WGS84 (EPSG:4326)' + veText;
+  const a = document.getElementById('datumNote'); if(a) a.textContent = text;
+  const b = document.getElementById('modalDatumNote'); if(b) b.textContent = text;
+}
+
+function renderChartInto(prof, wrap, tooltip, expanded){
   wrap.querySelectorAll('svg').forEach(n => n.remove());
 
-  const w = wrap.clientWidth || 380;
-  const h = 230;
-  const pad = { l:54, r:14, t:16, b:30 };
+  const w = wrap.clientWidth || (expanded ? 900 : 380);
+  const pad = { l:58, r:16, t:18, b:32 };
 
-  const elevs = prof.filter(p=>p.elev!=null).map(p=>p.elev);
-  let yMin = Math.min(...elevs), yMax = Math.max(...elevs);
-  const ySpan = Math.max(yMax - yMin, 0.5);
-  yMin -= ySpan * 0.08; yMax += ySpan * 0.08;
-  const xMin = 0, xMax = prof[prof.length-1].dist || 1;
+  const elevsM = prof.filter(p=>p.elev!=null).map(p=>p.elev);
+  const realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
+  const spanM = Math.max(realMax - realMin, 0.5);
+  const yPad = spanM * 0.08;
+  const yMinM = realMin - yPad, yMaxM = realMax + yPad;
+  const xMinM = 0, xMaxM = prof[prof.length-1].dist || 1;
 
-  chartState = { pad, w, h, xMin, xMax, yMin, yMax, prof };
+  const baseH = expanded ? 520 : 230;
+  let h = baseH;
+  if(veMode !== 'auto'){
+    // True exaggeration: vertical px/metre = horizontal px/metre * VE. For a shallow line
+    // this can be genuinely tiny (correctly demonstrating why exaggeration is needed) —
+    // deliberately NOT floored to baseH, or the control would silently do nothing in most
+    // realistic cases (verified empirically: a floor at baseH hid the effect entirely for
+    // a real 684m/9.4m-relief test line up to 20x).
+    const ve = parseFloat(veMode);
+    const pxPerMeterX = (w - pad.l - pad.r) / xMaxM;
+    const neededPlotH = (yMaxM - yMinM) * pxPerMeterX * ve;
+    h = Math.max(60, Math.min(neededPlotH + pad.t + pad.b, 6000));
+  }
 
   const svg = document.createElementNS(NS,'svg');
   svg.setAttribute('width', w);
@@ -702,7 +900,8 @@ function renderChart(prof){
 
   const defs = document.createElementNS(NS,'defs');
   const grad = document.createElementNS(NS,'linearGradient');
-  grad.setAttribute('id','areaGrad');
+  const gradId = 'areaGrad' + (expanded ? 'Modal' : 'Main');
+  grad.setAttribute('id', gradId);
   grad.setAttribute('x1','0'); grad.setAttribute('y1','0');
   grad.setAttribute('x2','0'); grad.setAttribute('y2','1');
   const stop1 = document.createElementNS(NS,'stop');
@@ -713,14 +912,14 @@ function renderChart(prof){
   defs.appendChild(grad);
   svg.appendChild(defs);
 
-  const X = d => pad.l + (d - xMin) / (xMax - xMin) * (w - pad.l - pad.r);
-  const Y = e => pad.t + (1 - (e - yMin) / (yMax - yMin)) * (h - pad.t - pad.b);
+  const X = d => pad.l + (d - xMinM) / (xMaxM - xMinM) * (w - pad.l - pad.r);
+  const Y = e => pad.t + (1 - (e - yMinM) / (yMaxM - yMinM)) * (h - pad.t - pad.b);
 
-  // gridlines + y labels
+  // gridlines + y labels (values shown in the active display unit)
   const gridN = 4;
   for(let i=0;i<=gridN;i++){
-    const e = yMin + (yMax - yMin) * i / gridN;
-    const y = Y(e);
+    const eM = yMinM + (yMaxM - yMinM) * i / gridN;
+    const y = Y(eM);
     const line = document.createElementNS(NS,'line');
     line.setAttribute('x1', pad.l); line.setAttribute('x2', w - pad.r);
     line.setAttribute('y1', y); line.setAttribute('y2', y);
@@ -731,19 +930,19 @@ function renderChart(prof){
     label.setAttribute('text-anchor','end');
     label.setAttribute('font-size','10'); label.setAttribute('font-family','JetBrains Mono, monospace');
     label.setAttribute('fill', PALETTE.axisText);
-    label.textContent = e.toFixed(1);
+    label.textContent = elevValue(eM).toFixed(1);
     svg.appendChild(label);
   }
   const xTicks = 4;
   for(let i=0;i<=xTicks;i++){
-    const d = xMin + (xMax - xMin) * i / xTicks;
-    const x = X(d);
+    const dM = xMinM + (xMaxM - xMinM) * i / xTicks;
+    const x = X(dM);
     const label = document.createElementNS(NS,'text');
     label.setAttribute('x', x); label.setAttribute('y', h - pad.b + 17);
     label.setAttribute('text-anchor', i===0 ? 'start' : (i===xTicks ? 'end' : 'middle'));
     label.setAttribute('font-size','10'); label.setAttribute('font-family','JetBrains Mono, monospace');
     label.setAttribute('fill', PALETTE.axisText);
-    label.textContent = d >= 1000 ? (d/1000).toFixed(2)+'km' : Math.round(d)+'m';
+    label.textContent = fmtDist(dM);
     svg.appendChild(label);
   }
 
@@ -754,7 +953,7 @@ function renderChart(prof){
     const x = X(p.dist), y = Y(p.elev);
     if(!open){
       dPath += 'M' + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
-      aPath += 'M' + x.toFixed(1) + ',' + Y(yMin).toFixed(1) + ' L' + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+      aPath += 'M' + x.toFixed(1) + ',' + Y(yMinM).toFixed(1) + ' L' + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
       open = true;
     } else {
       dPath += 'L' + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
@@ -764,20 +963,19 @@ function renderChart(prof){
 
   const area = document.createElementNS(NS,'path');
   area.setAttribute('d', aPath);
-  area.setAttribute('fill', 'url(#areaGrad)');
+  area.setAttribute('fill', 'url(#' + gradId + ')');
   area.setAttribute('stroke', 'none');
   svg.appendChild(area);
 
-  const line = document.createElementNS(NS,'path');
-  line.setAttribute('d', dPath);
-  line.setAttribute('fill', 'none');
-  line.setAttribute('stroke', PALETTE.accentDark);
-  line.setAttribute('stroke-width', '2.25');
-  line.setAttribute('stroke-linejoin', 'round');
-  line.setAttribute('stroke-linecap', 'round');
-  svg.appendChild(line);
+  const lineEl = document.createElementNS(NS,'path');
+  lineEl.setAttribute('d', dPath);
+  lineEl.setAttribute('fill', 'none');
+  lineEl.setAttribute('stroke', PALETTE.accentDark);
+  lineEl.setAttribute('stroke-width', expanded ? '2.75' : '2.25');
+  lineEl.setAttribute('stroke-linejoin', 'round');
+  lineEl.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(lineEl);
 
-  // axis lines
   const axisX = document.createElementNS(NS,'line');
   axisX.setAttribute('x1', pad.l); axisX.setAttribute('x2', w - pad.r);
   axisX.setAttribute('y1', h - pad.b); axisX.setAttribute('y2', h - pad.b);
@@ -792,63 +990,94 @@ function renderChart(prof){
   svg.appendChild(cross);
 
   const dot = document.createElementNS(NS,'circle');
-  dot.setAttribute('r','4'); dot.setAttribute('fill','#ffffff');
+  dot.setAttribute('r', expanded ? '5' : '4'); dot.setAttribute('fill','#ffffff');
   dot.setAttribute('stroke', PALETTE.accentDark); dot.setAttribute('stroke-width','2.5');
   dot.style.display = 'none';
   svg.appendChild(dot);
 
-  const tooltip = document.getElementById('chartTooltip');
+  const ci = { svg, cross, dot, tooltip, X, Y, w, h };
+  chartInstances.push(ci);
 
   svg.addEventListener('mousemove', (ev) => {
     const rect = svg.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
-    if(mx < pad.l || mx > w - pad.r){ hideHover(); return; }
-    const d = xMin + (mx - pad.l) / (w - pad.l - pad.r) * (xMax - xMin);
-    let nearest = prof[0], best = Infinity;
-    for(const p of prof){
-      const diff = Math.abs(p.dist - d);
-      if(diff < best){ best = diff; nearest = p; }
+    if(mx < pad.l || mx > w - pad.r){ hideStation(); return; }
+    const dM = xMinM + (mx - pad.l) / (w - pad.l - pad.r) * (xMaxM - xMinM);
+    let nearestIdx = 0, best = Infinity;
+    for(let i=0;i<prof.length;i++){
+      const diff = Math.abs(prof[i].dist - dM);
+      if(diff < best){ best = diff; nearestIdx = i; }
     }
-    if(nearest.elev == null){ hideHover(); return; }
-    const x = X(nearest.dist), y = Y(nearest.elev);
-    cross.setAttribute('x1', x); cross.setAttribute('x2', x);
-    cross.style.display = '';
-    dot.setAttribute('cx', x); dot.setAttribute('cy', y);
-    dot.style.display = '';
-    tooltip.style.display = '';
-    tooltip.style.left = Math.min(x + 8, w - 130) + 'px';
-    tooltip.style.top = Math.max(y - 40, 2) + 'px';
-    tooltip.innerHTML = fmtDist(nearest.dist) + '<br>elev ' + fmtElev(nearest.elev);
-
-    if(!hoverMarker){
-      hoverMarker = L.circleMarker([nearest.lat, nearest.lon], { radius:6, color:'#fff', weight:2, fillColor:PALETTE.accentDark, fillOpacity:1 }).addTo(map);
-    } else {
-      hoverMarker.setLatLng([nearest.lat, nearest.lon]);
-    }
+    showStation(nearestIdx, false);
   });
-  svg.addEventListener('mouseleave', hideHover);
-
-  function hideHover(){
-    cross.style.display = 'none';
-    dot.style.display = 'none';
-    tooltip.style.display = 'none';
-  }
+  svg.addEventListener('mouseleave', hideStation);
 
   wrap.appendChild(svg);
-  document.getElementById('chartCard').style.display = '';
+}
+
+function showStation(idx, fromMap){
+  const p = profile && profile[idx];
+  if(!p || p.elev == null) return;
+  chartInstances.forEach(ci => {
+    const x = ci.X(p.dist), y = ci.Y(p.elev);
+    ci.cross.setAttribute('x1', x); ci.cross.setAttribute('x2', x);
+    ci.cross.style.display = '';
+    ci.dot.setAttribute('cx', x); ci.dot.setAttribute('cy', y);
+    ci.dot.style.display = '';
+    ci.tooltip.style.display = '';
+    ci.tooltip.style.left = Math.min(x + 8, ci.w - 140) + 'px';
+    ci.tooltip.style.top = Math.max(y - 44, 2) + 'px';
+    ci.tooltip.innerHTML = fmtStation(p.dist) + '<br>elev ' + fmtElev(p.elev);
+  });
+  if(!hoverMarker){
+    hoverMarker = L.circleMarker([p.lat, p.lon], { radius:6, color:'#fff', weight:2, fillColor:PALETTE.accentDark, fillOpacity:1 }).addTo(map);
+  } else {
+    hoverMarker.setLatLng([p.lat, p.lon]);
+  }
+}
+
+function hideStation(){
+  chartInstances.forEach(ci => {
+    ci.cross.style.display = 'none';
+    ci.dot.style.display = 'none';
+    ci.tooltip.style.display = 'none';
+  });
+  if(hoverMarker){ map.removeLayer(hoverMarker); hoverMarker = null; }
 }
 
 window.addEventListener('resize', () => {
-  if(profile) renderChart(profile);
+  if(profile) refreshChart();
 });
+
+// ---------- expand modal ----------
+
+let modalOpen = false;
+document.getElementById('btnExpandChart').addEventListener('click', () => {
+  modalOpen = true;
+  document.getElementById('chartModal').style.display = 'flex';
+  refreshChart();
+});
+document.getElementById('btnCloseModal').addEventListener('click', closeModal);
+document.getElementById('chartModal').addEventListener('click', (e) => {
+  if(e.target.id === 'chartModal') closeModal();
+});
+document.addEventListener('keydown', (e) => {
+  if(e.key === 'Escape' && modalOpen) closeModal();
+});
+function closeModal(){
+  modalOpen = false;
+  document.getElementById('chartModal').style.display = 'none';
+}
 
 // ---------- export ----------
 
 document.getElementById('btnExportCsv').addEventListener('click', () => {
   if(!profile) return;
-  let csv = 'Distance_m,Latitude,Longitude,Elevation_m\n';
+  const distLabel = unitSystem === 'imperial' ? 'Distance_ft' : 'Distance_m';
+  const elevLabel = unitSystem === 'imperial' ? 'Elevation_ft' : 'Elevation_m';
+  let csv = distLabel + ',Latitude,Longitude,' + elevLabel + '\n';
   profile.forEach(p => {
-    csv += p.dist.toFixed(2) + ',' + p.lat.toFixed(7) + ',' + p.lon.toFixed(7) + ',' + (p.elev==null ? '' : p.elev.toFixed(3)) + '\n';
+    csv += distValue(p.dist).toFixed(2) + ',' + p.lat.toFixed(7) + ',' + p.lon.toFixed(7) + ',' + (p.elev==null ? '' : elevValue(p.elev).toFixed(3)) + '\n';
   });
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
@@ -860,7 +1089,7 @@ document.getElementById('btnExportCsv').addEventListener('click', () => {
 });
 
 document.getElementById('btnExportPng').addEventListener('click', () => {
-  const svg = document.querySelector('#chartWrap svg');
+  const svg = (modalOpen ? document.querySelector('#modalChartWrap svg') : document.querySelector('#chartWrap svg'));
   if(!svg) return;
   const scale = 2;
   const w = parseInt(svg.getAttribute('width'), 10);
