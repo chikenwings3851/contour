@@ -227,6 +227,18 @@
     box-shadow:var(--shadow-md);
   }
   .datum-note{font-size:10.5px;color:var(--text-faint);margin-top:9px;line-height:1.5;}
+  #gradePointsList{display:flex;flex-direction:column;gap:8px;}
+  .grade-point-row{display:flex;align-items:center;gap:6px;}
+  .grade-point-row .gp-field{display:flex;flex-direction:column;gap:2px;flex:1;}
+  .grade-point-row label{font-size:9.5px;color:var(--text-faint);font-weight:700;text-transform:uppercase;letter-spacing:0.3px;}
+  .grade-point-row input[type=number]{
+    font-family:var(--font-mono);font-size:12.5px;color:var(--text);
+    background:var(--surface);border:1px solid var(--border-strong);border-radius:7px;
+    padding:7px 8px;width:100%;
+  }
+  .grade-point-row input[type=number]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  .grade-point-row .gp-sta{font-size:9.5px;color:var(--text-faint);margin-top:2px;}
+  .grade-point-row button{padding:6px;margin-top:14px;}
   #surveyList{display:flex;flex-direction:column;gap:8px;}
   .survey-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;}
   .survey-project{font-size:12px;font-weight:700;color:var(--text);}
@@ -437,6 +449,33 @@
         <div class="chart-tooltip" id="chartTooltip"></div>
       </div>
       <div class="datum-note" id="datumNote"></div>
+    </div>
+
+    <div class="card" id="gradeCard" style="display:none;">
+      <div class="card-head">
+        <h2>Design Grade (Cut / Fill)</h2>
+        <button id="btnRemoveGrade" class="icon-btn" title="Remove design grade">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div id="gradeEmptyState">
+        <div class="empty-hint" style="padding:6px 4px 4px;">
+          <div class="t2">Add a target design grade to compare against the real ground — see exactly where you'd cut and where you'd fill, at every station.</div>
+        </div>
+        <button id="btnAddGrade" class="primary" style="width:100%;justify-content:center;margin-top:8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>
+          Add Design Grade
+        </button>
+      </div>
+      <div id="gradeEditor" style="display:none;">
+        <div id="gradePointsList"></div>
+        <button id="btnAddGradePoint" style="width:100%;justify-content:center;margin-top:8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          Add Grade Break Point
+        </button>
+        <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
+        <div class="datum-note">Cut/fill volumes are a rough estimate — ground area between the lines × your corridor width, not a true cross-section takeoff.</div>
+      </div>
     </div>
 
     <div class="card" id="surveyCard" style="display:none;">
@@ -925,12 +964,17 @@ function resetAll(){
   chartInstances = [];
   closeModal();
   closeView3D();
+  closeCrossSectionModal();
+  designGrade = null;
+  document.getElementById('gradeEmptyState').style.display = '';
+  document.getElementById('gradeEditor').style.display = 'none';
   btnDraw.classList.remove('active');
   btnUndo.disabled = true;
   btnFinish.disabled = true;
   document.getElementById('emptyCard').style.display = '';
   document.getElementById('statsCard').style.display = 'none';
   document.getElementById('chartCard').style.display = 'none';
+  document.getElementById('gradeCard').style.display = 'none';
   document.getElementById('surveyCard').style.display = 'none';
   document.getElementById('exportCard').style.display = 'none';
   document.getElementById('chartWrap').querySelectorAll('svg').forEach(n=>n.remove());
@@ -1064,6 +1108,7 @@ async function runProfile(){
     renderStats(profile, length);
     refreshChart();
     document.getElementById('exportCard').style.display = '';
+    document.getElementById('gradeCard').style.display = '';
     loadSurveyCoverage(profile, myRequestId); // best-effort, doesn't block the main profile
 
     const notes = [];
@@ -2047,6 +2092,222 @@ function renderStats(prof, length){
   document.getElementById('statsCard').style.display = '';
 }
 
+// ---------- design grade (cut / fill) ----------
+// A multi-segment target vertical alignment - a real design-grade line, not just a single slope -
+// compared against the actual ground profile everywhere: STA 0+000 to the end, in the 2D chart,
+// the 3D view, and the cross-sections.
+
+let designGrade = null; // { points: [{id, dist, elev}, ...] } sorted ascending by dist, or null
+let designGradeNextId = 1;
+
+// Registered exactly once, ever - the chart re-renders on every drag tick (rebuilding fresh
+// handle elements, and a fresh <svg>, each time), so drag tracking lives here instead of being
+// re-registered per render, which would otherwise leak a new document-level listener pair on
+// every single tick. Critically, this must NEVER cache geometry (svg element, pad, xMinM, etc.)
+// from mousedown time - a real bug caught by testing: caching the <svg> reference meant that
+// after the first drag-triggered refreshChart() removed and recreated it, the cached reference
+// pointed at a detached element whose getBoundingClientRect() silently returns all zeros,
+// sending the dragged point flying to the far end of the line. Everything is recomputed fresh,
+// every tick, from the live DOM and current profile/designGrade state instead.
+let gradeDragState = { active: false };
+document.addEventListener('mousemove', (ev) => {
+  if(!gradeDragState.active || !designGrade || !profile) return;
+  const wrap = gradeDragState.wrap;
+  const svg = wrap && wrap.querySelector('svg');
+  if(!svg) return;
+  const pt = designGrade.points.find(p => p.id === gradeDragState.pointId);
+  if(!pt) return;
+
+  const pad = { l:58, r:16, t:18, b:32 };
+  const w = parseFloat(svg.getAttribute('width')), h = parseFloat(svg.getAttribute('height'));
+  const xMinM = 0, xMaxM = profile[profile.length-1].dist || 1;
+  const { yMinM, yMaxM } = computeChartYRange(profile, xMinM, xMaxM);
+
+  const rect = svg.getBoundingClientRect();
+  const mx = Math.max(pad.l, Math.min(w-pad.r, ev.clientX - rect.left));
+  const my = Math.max(pad.t, Math.min(h-pad.b, ev.clientY - rect.top));
+  pt.dist = Math.round((xMinM + (mx-pad.l)/(w-pad.l-pad.r)*(xMaxM-xMinM)) * 10) / 10;
+  pt.elev = yMinM + (1-(my-pad.t)/(h-pad.t-pad.b))*(yMaxM-yMinM);
+  designGrade.points.sort((a,b) => a.dist - b.dist);
+  renderGradeEditor();
+  refreshChart();
+});
+document.addEventListener('mouseup', () => { gradeDragState.active = false; });
+
+// Design elevation at any distance, extrapolating past the first/last point using that segment's
+// own slope so cut/fill stays defined even if a point gets dragged inside the line's real extent.
+function designElevAt(dist){
+  const pts = designGrade.points;
+  if(pts.length < 2) return null;
+  if(dist <= pts[0].dist){
+    const a = pts[0], b = pts[1];
+    const slope = (b.elev-a.elev) / ((b.dist-a.dist) || 1);
+    return a.elev + slope*(dist-a.dist);
+  }
+  if(dist >= pts[pts.length-1].dist){
+    const a = pts[pts.length-2], b = pts[pts.length-1];
+    const slope = (b.elev-a.elev) / ((b.dist-a.dist) || 1);
+    return b.elev + slope*(dist-b.dist);
+  }
+  for(let i=1;i<pts.length;i++){
+    if(dist <= pts[i].dist){
+      const a = pts[i-1], b = pts[i];
+      const t = (dist-a.dist) / ((b.dist-a.dist) || 1);
+      return a.elev + (b.elev-a.elev)*t;
+    }
+  }
+  return pts[pts.length-1].elev;
+}
+
+// Shared by renderChartInto AND the grade-drag handler, which must never trust cached geometry
+// from a previous render (dragging triggers a full chart rebuild on every tick, so anything
+// captured at mousedown - the old SVG element included - goes stale after the very first move).
+function computeChartYRange(prof, xMinM, xMaxM){
+  const elevsM = prof.filter(p=>p.elev!=null).map(p=>p.elev);
+  let realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
+  if(designGrade){
+    designGrade.points.forEach(pt => { if(pt.elev < realMin) realMin = pt.elev; if(pt.elev > realMax) realMax = pt.elev; });
+    [designElevAt(xMinM), designElevAt(xMaxM)].forEach(e => { if(e < realMin) realMin = e; if(e > realMax) realMax = e; });
+  }
+  const spanM = Math.max(realMax - realMin, 0.5);
+  const yPad = spanM * 0.08;
+  return { yMinM: realMin - yPad, yMaxM: realMax + yPad };
+}
+
+// Splits the ground/design comparison into contiguous cut and fill runs, inserting the exact
+// zero-crossing point at each sign change so shaded regions end precisely at grade, not one
+// sample short of it.
+function splitCutFillRuns(prof){
+  const runs = [];
+  let current = null, prevSample = null;
+  for(const p of prof){
+    if(p.elev == null){ if(current) runs.push(current); current=null; prevSample=null; continue; }
+    const design = designElevAt(p.dist);
+    const diff = p.elev - design;
+    const kind = diff > 0 ? 'cut' : (diff < 0 ? 'fill' : 'none');
+    if(prevSample && prevSample.kind !== kind && prevSample.kind !== 'none' && kind !== 'none'){
+      const t = prevSample.diff / (prevSample.diff - diff);
+      const crossDist = prevSample.dist + (p.dist-prevSample.dist)*t;
+      const crossElev = prevSample.elev + (p.elev-prevSample.elev)*t;
+      if(current){ current.points.push({dist:crossDist, elev:crossElev, design:designElevAt(crossDist)}); runs.push(current); }
+      current = { kind, points: [{dist:crossDist, elev:crossElev, design:designElevAt(crossDist)}] };
+    }
+    if(!current || current.kind !== kind){
+      if(current) runs.push(current);
+      current = { kind, points: [] };
+    }
+    current.points.push({ dist:p.dist, elev:p.elev, design });
+    prevSample = { dist:p.dist, elev:p.elev, diff, kind };
+  }
+  if(current) runs.push(current);
+  return runs.filter(r => r.kind !== 'none' && r.points.length >= 2);
+}
+
+function computeCutFillStats(){
+  const runs = splitCutFillRuns(profile);
+  let cutArea = 0, fillArea = 0, maxCut = null, maxFill = null;
+  for(let i=1;i<profile.length;i++){
+    const a = profile[i-1], b = profile[i];
+    if(a.elev==null || b.elev==null) continue;
+    const da = a.elev - designElevAt(a.dist), db = b.elev - designElevAt(b.dist);
+    const dx = b.dist - a.dist, avg = (da+db)/2;
+    if(avg > 0) cutArea += avg*dx; else fillArea += -avg*dx;
+    if(da > 0 && (!maxCut || da > maxCut.amount)) maxCut = { amount: da, dist: a.dist };
+    if(da < 0 && (!maxFill || -da > maxFill.amount)) maxFill = { amount: -da, dist: a.dist };
+  }
+  const bufferM = parseFloat(document.getElementById('corridorWidth').value) * 2;
+  return { cutVolume: cutArea*bufferM, fillVolume: fillArea*bufferM, maxCut, maxFill, runs };
+}
+
+document.getElementById('btnAddGrade').addEventListener('click', () => {
+  if(!profile) return;
+  const valid = profile.filter(p=>p.elev!=null);
+  designGrade = { points: [
+    { id: designGradeNextId++, dist: valid[0].dist, elev: valid[0].elev },
+    { id: designGradeNextId++, dist: valid[valid.length-1].dist, elev: valid[valid.length-1].elev }
+  ]};
+  document.getElementById('gradeEmptyState').style.display = 'none';
+  document.getElementById('gradeEditor').style.display = '';
+  renderGradeEditor();
+  refreshChart();
+});
+document.getElementById('btnRemoveGrade').addEventListener('click', () => {
+  designGrade = null;
+  document.getElementById('gradeEmptyState').style.display = '';
+  document.getElementById('gradeEditor').style.display = 'none';
+  refreshChart();
+});
+document.getElementById('btnAddGradePoint').addEventListener('click', () => {
+  if(!designGrade) return;
+  const pts = designGrade.points;
+  // Insert a new point at the midpoint of whichever gap is currently largest.
+  let bestGap = -1, insertAt = pts.length;
+  for(let i=1;i<pts.length;i++){
+    const gap = pts[i].dist - pts[i-1].dist;
+    if(gap > bestGap){ bestGap = gap; insertAt = i; }
+  }
+  const a = pts[insertAt-1], b = pts[insertAt];
+  const midDist = (a.dist+b.dist)/2;
+  pts.splice(insertAt, 0, { id: designGradeNextId++, dist: midDist, elev: designElevAt(midDist) });
+  renderGradeEditor();
+  refreshChart();
+});
+
+function renderGradeEditor(){
+  if(!designGrade) return;
+  const list = document.getElementById('gradePointsList');
+  list.innerHTML = designGrade.points.map((pt, i) => (
+    '<div class="grade-point-row" data-idx="' + i + '">' +
+      '<div class="gp-field"><label>Station (m)</label><input type="number" class="gp-dist" step="1" value="' + pt.dist.toFixed(1) + '"><div class="gp-sta">' + fmtStation(pt.dist) + '</div></div>' +
+      '<div class="gp-field"><label>Elevation (' + (unitSystem==='imperial'?'ft':'m') + ')</label><input type="number" class="gp-elev" step="0.1" value="' + elevValue(pt.elev).toFixed(2) + '"></div>' +
+      (designGrade.points.length > 2 ? '<button class="gp-remove" title="Remove point"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>' : '') +
+    '</div>'
+  )).join('');
+
+  list.querySelectorAll('.grade-point-row').forEach(row => {
+    const idx = parseInt(row.dataset.idx, 10);
+    row.querySelector('.gp-dist').addEventListener('change', (e) => {
+      designGrade.points[idx].dist = parseFloat(e.target.value) || 0;
+      designGrade.points.sort((a,b) => a.dist - b.dist);
+      renderGradeEditor();
+      refreshChart();
+    });
+    row.querySelector('.gp-elev').addEventListener('change', (e) => {
+      const v = parseFloat(e.target.value);
+      designGrade.points[idx].elev = unitSystem === 'imperial' ? v / M_TO_FT : v;
+      renderCutFillStats();
+      refreshChart();
+    });
+    const removeBtn = row.querySelector('.gp-remove');
+    if(removeBtn) removeBtn.addEventListener('click', () => {
+      designGrade.points.splice(idx, 1);
+      renderGradeEditor();
+      refreshChart();
+    });
+  });
+
+  renderCutFillStats();
+}
+
+function renderCutFillStats(){
+  if(!designGrade) return;
+  const { cutVolume, fillVolume, maxCut, maxFill } = computeCutFillStats();
+  const rows = [
+    ['Total Cut (est.)', volumeStr(cutVolume), 'fall'],
+    ['Total Fill (est.)', volumeStr(fillVolume), 'rise'],
+    ['Max Cut', maxCut ? fmtElev(maxCut.amount) + ' @ ' + fmtStation(maxCut.dist) : '—', ''],
+    ['Max Fill', maxFill ? fmtElev(maxFill.amount) + ' @ ' + fmtStation(maxFill.dist) : '—', '']
+  ];
+  document.getElementById('cutFillStats').innerHTML = rows.map(([label,value,cls]) =>
+    '<div class="stat"><div class="label">' + label + '</div><div class="value' + (cls?' '+cls:'') + '">' + value + '</div></div>'
+  ).join('');
+}
+function volumeStr(m3){
+  const v = unitSystem === 'imperial' ? m3 * 35.3147 : m3;
+  const unit = unitSystem === 'imperial' ? 'ft³' : 'm³';
+  return (v >= 1000 ? (v/1000).toFixed(2)+'k' : v.toFixed(1)) + ' ' + unit;
+}
+
 // ---------- unit / scale controls ----------
 
 document.querySelectorAll('.unit-toggle button').forEach(btn => {
@@ -2060,6 +2321,7 @@ function setUnit(sys){
   unitSystem = sys;
   document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === sys));
   if(profile){ renderStats(profile, lastLength); refreshChart(); }
+  if(designGrade) renderGradeEditor();
 }
 function setVE(v){
   veMode = v;
@@ -2096,12 +2358,8 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   const w = wrap.clientWidth || (expanded ? 900 : 380);
   const pad = { l:58, r:16, t:18, b:32 };
 
-  const elevsM = prof.filter(p=>p.elev!=null).map(p=>p.elev);
-  const realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
-  const spanM = Math.max(realMax - realMin, 0.5);
-  const yPad = spanM * 0.08;
-  const yMinM = realMin - yPad, yMaxM = realMax + yPad;
   const xMinM = 0, xMaxM = prof[prof.length-1].dist || 1;
+  const { yMinM, yMaxM } = computeChartYRange(prof, xMinM, xMaxM);
 
   const baseH = expanded ? 520 : 230;
   let h = baseH;
@@ -2190,6 +2448,9 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   area.setAttribute('d', aPath);
   area.setAttribute('fill', 'url(#' + gradId + ')');
   area.setAttribute('stroke', 'none');
+  // Dimmed when a design grade is active so the cut/fill bands (painted on top, in the region
+  // between ground and design) read as clean red/green instead of blending into a muddy purple.
+  if(designGrade) area.setAttribute('fill-opacity', '0.35');
   svg.appendChild(area);
 
   const lineEl = document.createElementNS(NS,'path');
@@ -2200,6 +2461,57 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   lineEl.setAttribute('stroke-linejoin', 'round');
   lineEl.setAttribute('stroke-linecap', 'round');
   svg.appendChild(lineEl);
+
+  if(designGrade){
+    // Cut/fill shading: the band between ground and design, colored by which side is "up".
+    splitCutFillRuns(prof).forEach(run => {
+      let d2 = '';
+      run.points.forEach((p,i) => { const x=X(p.dist), y=Y(p.elev); d2 += (i===0?'M':'L')+x.toFixed(1)+','+y.toFixed(1)+' '; });
+      for(let i=run.points.length-1;i>=0;i--){ const p=run.points[i]; d2 += 'L'+X(p.dist).toFixed(1)+','+Y(p.design).toFixed(1)+' '; }
+      d2 += 'Z';
+      const band = document.createElementNS(NS,'path');
+      band.setAttribute('d', d2);
+      band.setAttribute('fill', run.kind === 'cut' ? 'rgba(224,72,62,0.38)' : 'rgba(14,159,110,0.38)');
+      band.setAttribute('stroke', 'none');
+      svg.appendChild(band);
+    });
+
+    // The design grade line itself, bold and dashed to read clearly against the ground line.
+    let gPath = '';
+    [xMinM, ...designGrade.points.map(p=>p.dist), xMaxM].sort((a,b)=>a-b).forEach((d,i) => {
+      const x = X(d), y = Y(designElevAt(d));
+      gPath += (i===0?'M':'L') + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+    });
+    const gradeLine = document.createElementNS(NS,'path');
+    gradeLine.setAttribute('d', gPath);
+    gradeLine.setAttribute('fill', 'none');
+    gradeLine.setAttribute('stroke', '#c2660a');
+    gradeLine.setAttribute('stroke-width', expanded ? '2.5' : '2');
+    gradeLine.setAttribute('stroke-dasharray', '8,5');
+    gradeLine.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(gradeLine);
+
+    // Draggable grade-break handles - drag to reshape the design grade directly on the chart.
+    // The actual mousemove/mouseup handling is registered exactly once at module scope (see
+    // gradeDragState below) - registering it here instead would add a fresh pair of listeners
+    // on every single chart refresh (i.e. on every drag tick), leaking indefinitely.
+    designGrade.points.forEach((pt) => {
+      const handle = document.createElementNS(NS,'circle');
+      handle.setAttribute('cx', X(pt.dist)); handle.setAttribute('cy', Y(pt.elev));
+      handle.setAttribute('r', expanded ? '7' : '6');
+      handle.setAttribute('fill', '#fff');
+      handle.setAttribute('stroke', '#c2660a');
+      handle.setAttribute('stroke-width', '2.5');
+      handle.style.cursor = 'ns-resize';
+      handle.addEventListener('mousedown', (ev) => {
+        // Only `wrap` is stored (never the svg/pad/geometry themselves) - see gradeDragState's
+        // own comment for why: this element is about to be destroyed on the very first drag tick.
+        gradeDragState = { active:true, pointId: pt.id, wrap };
+        ev.preventDefault(); ev.stopPropagation();
+      });
+      svg.appendChild(handle);
+    });
+  }
 
   const axisX = document.createElementNS(NS,'line');
   axisX.setAttribute('x1', pad.l); axisX.setAttribute('x2', w - pad.r);
@@ -2252,7 +2564,13 @@ function showStation(idx, fromMap){
     ci.tooltip.style.display = '';
     ci.tooltip.style.left = Math.min(x + 8, ci.w - 140) + 'px';
     ci.tooltip.style.top = Math.max(y - 44, 2) + 'px';
-    ci.tooltip.innerHTML = fmtStation(p.dist) + '<br>elev ' + fmtElev(p.elev);
+    let tip = fmtStation(p.dist) + '<br>elev ' + fmtElev(p.elev);
+    if(designGrade){
+      const design = designElevAt(p.dist);
+      const diff = p.elev - design;
+      tip += '<br>design ' + fmtElev(design) + '<br>' + (diff>=0 ? 'cut ' : 'fill ') + fmtElev(Math.abs(diff));
+    }
+    ci.tooltip.innerHTML = tip;
   });
   if(!hoverMarker){
     hoverMarker = L.circleMarker([p.lat, p.lon], { radius:6, color:'#fff', weight:2, fillColor:PALETTE.accentDark, fillOpacity:1 }).addTo(map);
