@@ -484,7 +484,7 @@
           </div>
         </div>
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
-        <div class="datum-note">Volumes use the Average End Area Method with a trapezoidal cross-section (bottom width + side slopes above) — the standard way to estimate earthwork before real survey cross-sections exist. Independent of the corridor width, which only controls how much terrain the 3D view/export shows.</div>
+        <div class="datum-note" id="cutFillPrecisionNote"></div>
       </div>
     </div>
 
@@ -1659,6 +1659,10 @@ async function openView3D(){
     view3dGridInfo = await buildCorridorGrid(bufferM, 'Building 3D terrain');
     initThreeScene();
     rebuildTerrainGeometry(parseFloat(document.getElementById('ve3d').value));
+    // The corridor grid just became available - upgrade the cut/fill stats panel from the fast
+    // flat-ground estimate to the real per-side daylight search immediately, without waiting for
+    // another grade edit to trigger it.
+    if(designGrade) renderCutFillStats();
     const activeTex = document.querySelector('#texToggle3d button.ghost-active').dataset.tex;
     await applyTerrainMaterial(activeTex);
     statusDiv.classList.add('hidden');
@@ -1819,7 +1823,10 @@ function updateDesignOverlay3D(ve, meanElev){
 
   if(view3dChannelGroup){ disposeGroup3D(view3dChannelGroup); view3dScene.remove(view3dChannelGroup); view3dChannelGroup = null; }
   if(designGrade && channelVisible3d){
-    view3dChannelGroup = buildDesignChannel3D(ve, meanElev);
+    // Skip the real per-side daylight search while a grade point is actively being dragged on the
+    // 2D chart (this can fire on every mousemove tick) - the flat-assumption fallback is fast
+    // enough to stay smooth; the precise shape re-appears the instant the drag ends.
+    view3dChannelGroup = buildDesignChannel3D(ve, meanElev, !gradeDragState.active);
     if(view3dChannelGroup) view3dScene.add(view3dChannelGroup);
   }
 }
@@ -1882,6 +1889,20 @@ function utmToLocal3D(ux, uy){
   const { xmin, ymax, W, H } = view3dGridInfo;
   const col = (ux - xmin) / 0.5, row = (ymax - uy) / 0.5;
   return { x: (col - W/2) * 0.5, z: (row - H/2) * 0.5 };
+}
+
+// Real ground elevation at an arbitrary point in the same local coordinate space as the terrain
+// mesh (i.e. the inverse of utmToLocal3D's own formula) - the one shared source of truth the
+// precise cut/fill volume calculation and the 3D channel mesh both read from, so a station's real
+// per-side daylight search always comes from the exact same fetched terrain. Returns null off the
+// edge of the fetched corridor grid, or over a NoData gap in it.
+function gridElevAtLocal(x, z){
+  if(!view3dGridInfo) return null;
+  const { elev, W, H } = view3dGridInfo;
+  const col = Math.round(x / 0.5 + W / 2), row = Math.round(z / 0.5 + H / 2);
+  if(col < 0 || col >= W || row < 0 || row >= H) return null;
+  const v = elev[row * W + col];
+  return v === -9999 ? null : v;
 }
 
 // Interpolates a {lat,lon,elev} point at an arbitrary distance along the dense elevation
@@ -2033,7 +2054,7 @@ function buildDesignGradeLine3D(ve, meanElev){
 // line at ground) and as an embankment for a fill (wide base at ground, narrow crest at design)
 // with no separate cut/fill branch needed. Colored red/green per station to match the exact same
 // cut/fill convention as the 2D chart's shaded bands and the existing cut/fill stakes above.
-function buildDesignChannel3D(ve, meanElev){
+function buildDesignChannel3D(ve, meanElev, precise){
   if(!designGrade || !profile || !profile.length || !view3dGridInfo) return null;
   const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
   const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
@@ -2053,36 +2074,62 @@ function buildDesignChannel3D(ve, meanElev){
       tx /= len; tz /= len;
       const px = -tz, pz = tx; // perpendicular, same left-hand convention as buildStationMarkers3D
       const aNL = [a.x+px*a.halfN, a.yN, a.z+pz*a.halfN], aNR = [a.x-px*a.halfN, a.yN, a.z-pz*a.halfN];
-      const aWL = [a.x+px*a.halfW, a.yW, a.z+pz*a.halfW], aWR = [a.x-px*a.halfW, a.yW, a.z-pz*a.halfW];
+      const aWL = [a.x+px*a.posOff, a.posY, a.z+pz*a.posOff], aWR = [a.x+px*a.negOff, a.negY, a.z+pz*a.negOff];
       const bNL = [b.x+px*b.halfN, b.yN, b.z+pz*b.halfN], bNR = [b.x-px*b.halfN, b.yN, b.z-pz*b.halfN];
-      const bWL = [b.x+px*b.halfW, b.yW, b.z+pz*b.halfW], bWR = [b.x-px*b.halfW, b.yW, b.z-pz*b.halfW];
+      const bWL = [b.x+px*b.posOff, b.posY, b.z+pz*b.posOff], bWR = [b.x+px*b.negOff, b.negY, b.z+pz*b.negOff];
       const ac = [a.c.r, a.c.g, a.c.b], bc = [b.c.r, b.c.g, b.c.b];
       const quad = (p1,p2,p3,p4,c1,c2,c3,c4) => {
         positions.push(...p1,...p2,...p3, ...p1,...p3,...p4);
         colors.push(...c1,...c2,...c3, ...c1,...c3,...c4);
       };
-      quad(aWL, aNL, bNL, bWL, ac, ac, bc, bc); // left slope face
+      quad(aWL, aNL, bNL, bWL, ac, ac, bc, bc); // "positive side" slope face
       quad(aNL, aNR, bNR, bNL, ac, ac, bc, bc); // narrow band (trench floor / embankment crest)
-      quad(aNR, aWR, bWR, bNR, ac, ac, bc, bc); // right slope face
+      quad(aNR, aWR, bWR, bNR, ac, ac, bc, bc); // "negative side" slope face
     }
     seg = [];
   }
 
-  profile.forEach(p => {
-    if(p.elev == null){ flushSeg(); return; }
+  // Precomputed once so the per-point daylight search (option below) can find each point's own
+  // neighbours without re-projecting every profile point on every lookup.
+  const localPts = profile.map(p => {
+    if(p.elev == null) return null;
     const [ux, uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
-    const { x, z } = utmToLocal3D(ux, uy);
+    return utmToLocal3D(ux, uy);
+  });
+
+  profile.forEach((p, idx) => {
+    if(p.elev == null){ flushSeg(); return; }
+    const { x, z } = localPts[idx];
     const design = designElevAt(p.dist);
     const depth = p.elev - design;
     const absDepth = Math.abs(depth);
+    const isCut = depth >= 0;
     const halfN = bottomWidth / 2;
     const halfW = halfN + sideSlope * absDepth;
-    seg.push({
-      x, z, halfN, halfW,
-      yN: (design - meanElev) * ve + LIFT,
-      yW: (p.elev - meanElev) * ve + LIFT,
-      c: depth >= 0 ? cutColor : fillColor
-    });
+    const yN = (design - meanElev) * ve + LIFT;
+
+    // Flat-assumption fallback (fast, always available)
+    let posOff = halfW, negOff = -halfW;
+    let posY = (p.elev - meanElev) * ve + LIFT, negY = posY;
+
+    if(precise && absDepth > 1e-6){
+      const back = localPts[Math.max(0, idx-1)], fwd = localPts[Math.min(localPts.length-1, idx+1)];
+      if(back && fwd){
+        let tx = fwd.x-back.x, tz = fwd.z-back.z;
+        const tl = Math.hypot(tx, tz);
+        if(tl > 1e-6){
+          tx /= tl; tz /= tl;
+          const px = -tz, pz = tx;
+          const lookup = (o) => gridElevAtLocal(x+px*o, z+pz*o);
+          const posPt = findDaylightPoint(design, halfN, sideSlope, isCut, 1, lookup);
+          const negPt = findDaylightPoint(design, halfN, sideSlope, isCut, -1, lookup);
+          if(posPt){ posOff = posPt.offset; posY = (posPt.elev - meanElev)*ve + LIFT; }
+          if(negPt){ negOff = negPt.offset; negY = (negPt.elev - meanElev)*ve + LIFT; }
+        }
+      }
+    }
+
+    seg.push({ x, z, halfN, yN, posOff, posY, negOff, negY, c: isCut ? cutColor : fillColor });
   });
   flushSeg();
 
@@ -2318,12 +2365,10 @@ function renderCrossSectionChart(xsPoints, stationDist){
   area.setAttribute('d',a); area.setAttribute('fill','rgba(91,91,240,0.15)'); area.setAttribute('stroke','none');
   svg.appendChild(area);
 
-  // The proposed trapezoid template (bottom width + side slopes) at this one station - same
-  // single-depth formula as everywhere else in the app (the 3D channel, the volume math): depth is
-  // ground-vs-design AT THE CENTRELINE only, not a true daylight search against this station's real
-  // (possibly cross-sloped) ground on either side. That keeps this drawing consistent with the
-  // volume/3D numbers instead of quietly using a different, more "accurate" method that would show
-  // a different shape than what the stats panel actually calculated.
+  // The proposed trapezoid template (bottom width + side slopes) at this one station, using a
+  // real per-side daylight search against this exact station's own fetched ground samples
+  // (xsPoints) - true accuracy, not the flat-at-centreline shortcut, since this view already has
+  // real ground data on both sides fetched anyway.
   if(designGrade && stationDist != null){
     const centreGround = profilePointAtDist(stationDist);
     if(centreGround && centreGround.elev != null){
@@ -2331,14 +2376,33 @@ function renderCrossSectionChart(xsPoints, stationDist){
       const depth = Math.abs(centreGround.elev - designElevHere);
       const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
       const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
-      const halfN = bottomWidth / 2, halfW = halfN + sideSlope * depth;
-      const shapeColor = centreGround.elev >= designElevHere ? '#e0483e' : '#0d9f6e'; // matches the 2D profile's cut/fill bands and the 3D channel
+      const halfN = bottomWidth / 2;
+      const isCut = centreGround.elev >= designElevHere;
+      const shapeColor = isCut ? '#e0483e' : '#0d9f6e'; // matches the 2D profile's cut/fill bands and the 3D channel
+
+      const xsLookup = (offset) => {
+        for(let i=1;i<xsPoints.length;i++){
+          if(xsPoints[i].offset >= offset){
+            const p1 = xsPoints[i-1], p2 = xsPoints[i];
+            if(p1.elev == null || p2.elev == null) return null;
+            const t = (offset-p1.offset) / ((p2.offset-p1.offset) || 1);
+            return p1.elev + (p2.elev-p1.elev)*t;
+          }
+        }
+        return null;
+      };
+      const halfWFallback = halfN + sideSlope*depth;
+      let posPt = depth > 1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, 1, xsLookup) : null;
+      let negPt = depth > 1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, -1, xsLookup) : null;
+      if(!posPt) posPt = { offset: halfWFallback, elev: centreGround.elev };
+      if(!negPt) negPt = { offset: -halfWFallback, elev: centreGround.elev };
+
       const shape = document.createElementNS(NS,'path');
       shape.setAttribute('d',
-        'M'+X(-halfW).toFixed(1)+','+Y(centreGround.elev).toFixed(1)+' ' +
+        'M'+X(negPt.offset).toFixed(1)+','+Y(negPt.elev).toFixed(1)+' ' +
         'L'+X(-halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' ' +
         'L'+X(halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' ' +
-        'L'+X(halfW).toFixed(1)+','+Y(centreGround.elev).toFixed(1)+' '
+        'L'+X(posPt.offset).toFixed(1)+','+Y(posPt.elev).toFixed(1)+' '
       );
       shape.setAttribute('fill', shapeColor); shape.setAttribute('fill-opacity','0.28');
       shape.setAttribute('stroke', shapeColor); shape.setAttribute('stroke-width','2.25');
@@ -2602,26 +2666,122 @@ function splitCutFillRuns(prof){
 // Trapezoidal channel/trench cross-section (flat bottom + two side slopes expressed as a
 // horizontal:1-vertical ratio) - the real cross-section shape, not a stand-in for the 3D
 // viewing corridor. Area = bottom*depth + sideSlope*depth^2 (rectangle + two side triangles).
+// This is the FAST fallback: it assumes flat ground at the centreline elevation on both sides.
+// Used when real off-centreline ground data isn't available (no corridor grid fetched yet) or
+// during an active grade-point drag, where findDaylightPoint()'s per-tick search would be too
+// slow to feel smooth. See findDaylightPoint() for the real per-side version.
 function trapezoidArea(depth, bottomWidth, sideSlope){
   if(depth <= 0) return 0;
   return bottomWidth*depth + sideSlope*depth*depth;
 }
 
+// Walks outward from the bottom (design-elevation) corner of the trapezoid along the side-slope
+// ratio, one small rise/fall step at a time, until the slope surface crosses the REAL ground
+// (read via `groundLookup(offset)`, which returns null where no real data exists) - the true
+// "daylight" point, instead of assuming it's flat at the centreline's ground elevation. `sign` is
+// +1 or -1 for which side to search. Returns null if there's no real ground data even at the
+// bottom corner, or if the search runs off the edge of the available data before crossing -
+// callers fall back to the flat assumption in either case.
+function findDaylightPoint(design, halfN, sideSlope, isCut, sign, groundLookup){
+  const stepH = 0.1;
+  const maxH = Math.max(sideSlope, 1) * 60;
+  let prevOffset = sign * halfN, prevElev = design;
+  let prevGround = groundLookup(prevOffset);
+  if(prevGround == null) return null;
+  for(let h = stepH; h <= maxH; h += stepH){
+    const offset = sign * halfN + sign * sideSlope * h;
+    const elev = isCut ? design + h : design - h;
+    const ground = groundLookup(offset);
+    if(ground == null) return null;
+    const wasEnclosed = isCut ? (prevElev < prevGround) : (prevElev > prevGround);
+    const nowEnclosed = isCut ? (elev < ground) : (elev > ground);
+    if(wasEnclosed && !nowEnclosed){
+      const dElev = elev - prevElev, dGround = ground - prevGround;
+      const denom = dElev - dGround;
+      const t = Math.abs(denom) < 1e-9 ? 0.5 : Math.max(0, Math.min(1, (prevGround - prevElev) / denom));
+      return { offset: prevOffset + (offset - prevOffset) * t, elev: prevElev + dElev * t };
+    }
+    prevOffset = offset; prevElev = elev; prevGround = ground;
+  }
+  return { offset: prevOffset, elev: prevElev }; // never crossed within maxH - extremely steep/deep edge case
+}
+
+// Shoelace formula for a simple (non-self-intersecting) polygon in (offset, elevation) space -
+// used for the real cross-sectional area once the daylight points on each side may sit at
+// different elevations (asymmetric ground), where the old bottomWidth*depth+sideSlope*depth^2
+// closed form no longer applies.
+function shoelaceArea(points){
+  let sum = 0;
+  for(let i=0;i<points.length;i++){
+    const a = points[i], b = points[(i+1)%points.length];
+    sum += a.offset*b.elev - b.offset*a.elev;
+  }
+  return Math.abs(sum) / 2;
+}
+
+// Builds a groundLookup(offset) function for a given station, reading real ground elevation off
+// the already-fetched corridor grid (the same terrain the 3D view and GeoTIFF export use) via a
+// local tangent estimated from nearby profile points. Returns null if the corridor grid hasn't
+// been fetched yet (3D view never opened) or there isn't enough profile data around this station
+// to estimate a tangent - callers fall back to the flat-assumption formula in that case.
+function realGroundLookupAt(dist){
+  if(!view3dGridInfo || !profile || !profile.length) return null;
+  const totalLen = profile[profile.length-1].dist;
+  const microStep = Math.min(2, dist, totalLen-dist) || 0.5;
+  const p = profilePointAtDist(dist);
+  const back = profilePointAtDist(Math.max(0, dist-microStep));
+  const fwd = profilePointAtDist(Math.min(totalLen, dist+microStep));
+  if(!p || p.elev==null || !back || !fwd || back.elev==null || fwd.elev==null) return null;
+  const epsg = 'EPSG:' + view3dGridInfo.sr;
+  const [ux,uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
+  const [bx,by] = proj4('WGS84', epsg, [back.lon, back.lat]);
+  const [fx,fy] = proj4('WGS84', epsg, [fwd.lon, fwd.lat]);
+  let dx = fx-bx, dz = fy-by;
+  const len = Math.hypot(dx,dz) || 1; dx/=len; dz/=len;
+  const perpX = -dz, perpZ = dx;
+  const { x: cx, z: cz } = utmToLocal3D(ux, uy);
+  return (offset) => gridElevAtLocal(cx+perpX*offset, cz+perpZ*offset);
+}
+
 // Average End Area Method: cross-sectional area computed at every profile sample, consecutive
 // areas averaged and multiplied by the distance between them - the standard way earthwork is
 // estimated from a profile before real surveyed cross-sections exist at every station.
+//
+// Precise mode (once the corridor grid has been fetched, i.e. the 3D view has been opened at
+// least once) replaces the flat-assumption trapezoidArea() with a real per-side daylight search
+// against that grid at every sample, using the shoelace formula for the resulting (possibly
+// asymmetric) polygon area - the same real search used by the 3D channel and cross-sections.
+// Falls back to the fast flat-assumption formula while a grade point is actively being dragged
+// (this function can run on every mousemove tick then) or wherever real ground data runs out.
 function computeCutFillStats(){
   const runs = splitCutFillRuns(profile);
   const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
   const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+  const precise = !!view3dGridInfo && !gradeDragState.active;
   let cutVolume = 0, fillVolume = 0, maxCut = null, maxFill = null;
+
+  function areaAt(dist, elev, design){
+    const depth = Math.abs(elev - design);
+    if(depth <= 1e-6) return 0;
+    if(!precise) return trapezoidArea(depth, bottomWidth, sideSlope);
+    const lookup = realGroundLookupAt(dist);
+    if(!lookup) return trapezoidArea(depth, bottomWidth, sideSlope);
+    const isCut = elev >= design;
+    const halfN = bottomWidth / 2;
+    const posPt = findDaylightPoint(design, halfN, sideSlope, isCut, 1, lookup);
+    const negPt = findDaylightPoint(design, halfN, sideSlope, isCut, -1, lookup);
+    if(!posPt || !negPt) return trapezoidArea(depth, bottomWidth, sideSlope);
+    return shoelaceArea([
+      { offset:-halfN, elev:design }, { offset:halfN, elev:design },
+      { offset:posPt.offset, elev:posPt.elev }, { offset:negPt.offset, elev:negPt.elev }
+    ]);
+  }
 
   runs.forEach(run => {
     for(let i=1;i<run.points.length;i++){
       const a = run.points[i-1], b = run.points[i];
-      const depthA = Math.abs(a.elev - a.design), depthB = Math.abs(b.elev - b.design);
-      const areaA = trapezoidArea(depthA, bottomWidth, sideSlope);
-      const areaB = trapezoidArea(depthB, bottomWidth, sideSlope);
+      const areaA = areaAt(a.dist, a.elev, a.design);
+      const areaB = areaAt(b.dist, b.elev, b.design);
       const dx = b.dist - a.dist;
       const vol = (areaA + areaB) / 2 * dx;
       if(run.kind === 'cut') cutVolume += vol; else fillVolume += vol;
@@ -2634,7 +2794,7 @@ function computeCutFillStats(){
     if(diff > 0 && (!maxCut || diff > maxCut.amount)) maxCut = { amount: diff, dist: p.dist };
     if(diff < 0 && (!maxFill || -diff > maxFill.amount)) maxFill = { amount: -diff, dist: p.dist };
   }
-  return { cutVolume, fillVolume, maxCut, maxFill, runs, bottomWidth, sideSlope };
+  return { cutVolume, fillVolume, maxCut, maxFill, runs, bottomWidth, sideSlope, precise };
 }
 
 document.getElementById('btnAddGrade').addEventListener('click', () => {
@@ -2712,16 +2872,19 @@ function renderGradeEditor(){
 
 function renderCutFillStats(){
   if(!designGrade) return;
-  const { cutVolume, fillVolume, maxCut, maxFill } = computeCutFillStats();
+  const { cutVolume, fillVolume, maxCut, maxFill, precise } = computeCutFillStats();
   const rows = [
-    ['Total Cut (est.)', volumeStr(cutVolume), 'fall'],
-    ['Total Fill (est.)', volumeStr(fillVolume), 'rise'],
+    [precise ? 'Total Cut (precise)' : 'Total Cut (est.)', volumeStr(cutVolume), 'fall'],
+    [precise ? 'Total Fill (precise)' : 'Total Fill (est.)', volumeStr(fillVolume), 'rise'],
     ['Max Cut', maxCut ? fmtElev(maxCut.amount) + ' @ ' + fmtStation(maxCut.dist) : '—', ''],
     ['Max Fill', maxFill ? fmtElev(maxFill.amount) + ' @ ' + fmtStation(maxFill.dist) : '—', '']
   ];
   document.getElementById('cutFillStats').innerHTML = rows.map(([label,value,cls]) =>
     '<div class="stat"><div class="label">' + label + '</div><div class="value' + (cls?' '+cls:'') + '">' + value + '</div></div>'
   ).join('');
+  document.getElementById('cutFillPrecisionNote').textContent = precise
+    ? 'Volumes use a real per-side daylight search against the fetched corridor terrain (Average End Area Method) — bottom width + side slopes above, independent of the corridor width slider, which only controls how much terrain the 3D view/export shows.'
+    : 'Volumes use a fast estimate (Average End Area Method, flat ground assumed on both sides at the centreline elevation). Open the 3D Terrain view once to unlock precise per-side volumes using the real fetched ground.';
   refreshDesignOverlay3DIfOpen();
 }
 function volumeStr(m3){
