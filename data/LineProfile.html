@@ -560,7 +560,7 @@
           <button data-tex="aerial" class="ghost-active">Aerial</button>
           <button data-tex="shaded">Shaded</button>
         </div>
-        <button id="btnToggleGrid3d" class="ghost-active">📐 Grid</button>
+        <button id="btnToggleStations3d" class="ghost-active">📍 Stations</button>
         <button id="btnToggleLine3d" class="ghost-active">📏 Line</button>
         <button id="btnCloseView3d" class="icon-btn">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -1433,7 +1433,7 @@ function buildFloat32GeoTIFF(elev,W,H,psx,psy,ulX,ulY,epsg){
 let view3dGridInfo = null;
 let view3dRenderer = null, view3dScene = null, view3dCamera = null, view3dControls = null;
 let view3dMesh = null, view3dAnimFrame = null, view3dOpen = false;
-let view3dMeasureGroup = null, gridVisible3d = true;
+let view3dMeasureGroup = null, stationsVisible3d = true;
 let view3dLineGroup = null, lineVisible3d = true;
 
 makeDraggable(document.querySelector('.view3d-panel'), document.getElementById('view3dDragHandle'));
@@ -1449,9 +1449,9 @@ document.querySelectorAll('#texToggle3d button').forEach(btn => {
     if(view3dMesh) applyTerrainMaterial(btn.dataset.tex);
   });
 });
-document.getElementById('btnToggleGrid3d').addEventListener('click', (e) => {
-  gridVisible3d = !gridVisible3d;
-  e.currentTarget.classList.toggle('ghost-active', gridVisible3d);
+document.getElementById('btnToggleStations3d').addEventListener('click', (e) => {
+  stationsVisible3d = !stationsVisible3d;
+  e.currentTarget.classList.toggle('ghost-active', stationsVisible3d);
   if(view3dGridInfo) rebuildTerrainGeometry(parseFloat(document.getElementById('ve3d').value));
 });
 document.getElementById('btnToggleLine3d').addEventListener('click', (e) => {
@@ -1587,9 +1587,9 @@ function rebuildTerrainGeometry(ve){
   view3dControls.update();
 
   if(view3dMeasureGroup){ disposeGroup3D(view3dMeasureGroup); view3dScene.remove(view3dMeasureGroup); view3dMeasureGroup = null; }
-  if(gridVisible3d){
-    view3dMeasureGroup = buildMeasurementGrid3D(W, H, (minElev - meanElev) * ve);
-    view3dScene.add(view3dMeasureGroup);
+  if(stationsVisible3d){
+    view3dMeasureGroup = buildStationMarkers3D(ve, meanElev);
+    if(view3dMeasureGroup) view3dScene.add(view3dMeasureGroup);
   }
 
   if(view3dLineGroup){ disposeGroup3D(view3dLineGroup); view3dScene.remove(view3dLineGroup); view3dLineGroup = null; }
@@ -1638,44 +1638,82 @@ function makeMeasurementSprite3D(text){
   return new THREE.Sprite(mat);
 }
 
-// Real-world measurement grid + distance labels along two edges — spacing adapts to the
-// corridor's own length so it always shows a sane number of divisions (roughly 15-20).
-function buildMeasurementGrid3D(W, H, baseY){
-  const group = new THREE.Group();
-  const lengthM = W * 0.5, widthM = H * 0.5;
-  const spacing = niceGridSpacing(Math.max(lengthM, widthM), 15);
-  const halfL = lengthM / 2, halfW = widthM / 2;
-
-  const positions = [];
-  for(let x = -halfL; x <= halfL + 1e-6; x += spacing) positions.push(x, baseY, -halfW, x, baseY, halfW);
-  for(let z = -halfW; z <= halfW + 1e-6; z += spacing) positions.push(-halfL, baseY, z, halfL, baseY, z);
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  const lineMat = new THREE.LineBasicMaterial({ color: 0x5b6b85, transparent: true, opacity: 0.55 });
-  group.add(new THREE.LineSegments(geom, lineMat));
-
-  const labelSize = Math.max(spacing * 1.1, 2);
-  for(let x = -halfL; x <= halfL + 1e-6; x += spacing){
-    const label = makeMeasurementSprite3D(Math.round(x + halfL) + 'm');
-    label.scale.set(labelSize, labelSize * 0.28, 1);
-    label.position.set(x, baseY, -halfW - spacing * 0.35);
-    group.add(label);
-  }
-  for(let z = -halfW; z <= halfW + 1e-6; z += spacing){
-    const label = makeMeasurementSprite3D(Math.round(z + halfW) + 'm');
-    label.scale.set(labelSize, labelSize * 0.28, 1);
-    label.position.set(-halfL - spacing * 0.35, baseY, z);
-    group.add(label);
-  }
-  return group;
-}
-
 // Maps a real UTM coordinate to this scene's local space using the exact same formula the
-// terrain mesh's own vertices use, so the drawn line lands precisely on the surface beneath it.
+// terrain mesh's own vertices use, so anything built from it lands precisely on the surface.
 function utmToLocal3D(ux, uy){
   const { xmin, ymax, W, H } = view3dGridInfo;
   const col = (ux - xmin) / 0.5, row = (ymax - uy) / 0.5;
   return { x: (col - W/2) * 0.5, z: (row - H/2) * 0.5 };
+}
+
+// Interpolates a {lat,lon,elev} point at an arbitrary distance along the dense elevation
+// profile (binary search over its already-sorted `dist` values), for placing a station at an
+// exact chainage rather than only at wherever a sample happened to land.
+function profilePointAtDist(d){
+  const n = profile.length;
+  if(d <= profile[0].dist) return profile[0];
+  if(d >= profile[n-1].dist) return profile[n-1];
+  let lo = 0, hi = n-1;
+  while(hi - lo > 1){
+    const mid = (lo+hi) >> 1;
+    if(profile[mid].dist <= d) lo = mid; else hi = mid;
+  }
+  const a = profile[lo], b = profile[hi];
+  if(a.elev == null || b.elev == null) return null;
+  const t = (d - a.dist) / ((b.dist - a.dist) || 1);
+  return { lat: a.lat + (b.lat-a.lat)*t, lon: a.lon + (b.lon-a.lon)*t, elev: a.elev + (b.elev-a.elev)*t, dist: d };
+}
+
+// Real alignment station markers directly on the drawn line itself (STA 0+000, 0+050, ...),
+// same convention and spacing style as the 2D chart's hover tooltip - a short perpendicular tick
+// plus a chainage label at each interval, not a separate ground-reference grid.
+function buildStationMarkers3D(ve, meanElev){
+  if(!profile || profile.length < 2 || !view3dGridInfo) return null;
+  const totalLen = profile[profile.length-1].dist;
+  if(totalLen <= 0) return null;
+  const interval = niceGridSpacing(totalLen, 15);
+  const epsg = 'EPSG:' + view3dGridInfo.sr;
+  const group = new THREE.Group();
+  const tickMat = new THREE.LineBasicMaterial({ color: 0xffd23f });
+  const microStep = Math.max(interval * 0.05, 0.5);
+
+  for(let d = 0; d <= totalLen + 1e-6; d += interval){
+    const dd = Math.min(d, totalLen);
+    const p = profilePointAtDist(dd);
+    if(!p) continue;
+    const [ux, uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
+    const { x, z } = utmToLocal3D(ux, uy);
+    const y = (p.elev - meanElev) * ve + Math.max(ve * 0.15, 0.3);
+
+    // Local tangent direction (from nearby points) so the tick sits perpendicular to the
+    // alignment, not just along a fixed world axis.
+    const back = profilePointAtDist(Math.max(0, dd - microStep));
+    const fwd = profilePointAtDist(Math.min(totalLen, dd + microStep));
+    let dx = 1, dz = 0;
+    if(back && fwd){
+      const [bux,buy] = proj4('WGS84', epsg, [back.lon, back.lat]);
+      const [fux,fuy] = proj4('WGS84', epsg, [fwd.lon, fwd.lat]);
+      const bp = utmToLocal3D(bux,buy), fp = utmToLocal3D(fux,fuy);
+      dx = fp.x - bp.x; dz = fp.z - bp.z;
+      const len = Math.hypot(dx,dz) || 1; dx/=len; dz/=len;
+    }
+    const perpX = -dz, perpZ = dx;
+    const tickLen = Math.max(interval * 0.12, 1.2);
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([
+      x-perpX*tickLen, y, z-perpZ*tickLen,
+      x+perpX*tickLen, y, z+perpZ*tickLen
+    ], 3));
+    group.add(new THREE.Line(geom, tickMat));
+
+    const label = makeMeasurementSprite3D(fmtStation(dd));
+    const labelSize = Math.max(interval * 0.9, 3);
+    label.scale.set(labelSize, labelSize * 0.28, 1);
+    label.position.set(x + perpX*tickLen*2, y, z + perpZ*tickLen*2);
+    group.add(label);
+  }
+  return group.children.length ? group : null;
 }
 
 // Drapes the actual drawn line (using the dense elevation `profile`, not just the few clicked
