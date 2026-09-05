@@ -1623,16 +1623,21 @@ function niceGridSpacing(totalLengthM, targetDivisions){
   return nice * mag;
 }
 
-function makeMeasurementSprite3D(text){
+function makeMeasurementSprite3D(line1, line2){
   const canvas = document.createElement('canvas');
-  canvas.width = 256; canvas.height = 64;
+  canvas.width = 280; canvas.height = 96;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = 'rgba(14,20,32,0.75)';
-  ctx.fillRect(4, 14, 248, 36);
-  ctx.font = 'bold 28px Arial, sans-serif';
-  ctx.fillStyle = '#e7edf7';
+  ctx.fillStyle = 'rgba(14,20,32,0.8)';
+  ctx.fillRect(4, 4, 272, 88);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, 128, 32);
+  ctx.font = 'bold 30px Arial, sans-serif';
+  ctx.fillStyle = '#e7edf7';
+  ctx.fillText(line1, 140, line2 ? 34 : 48);
+  if(line2){
+    ctx.font = '600 24px Arial, sans-serif';
+    ctx.fillStyle = '#a9c4ff';
+    ctx.fillText(line2, 140, 68);
+  }
   const tex = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
   return new THREE.Sprite(mat);
@@ -1707,9 +1712,9 @@ function buildStationMarkers3D(ve, meanElev){
     ], 3));
     group.add(new THREE.Line(geom, tickMat));
 
-    const label = makeMeasurementSprite3D(fmtStation(dd));
+    const label = makeMeasurementSprite3D(fmtStation(dd), fmtElev(p.elev));
     const labelSize = Math.max(interval * 0.9, 3);
-    label.scale.set(labelSize, labelSize * 0.28, 1);
+    label.scale.set(labelSize, labelSize * 0.343, 1);
     label.position.set(x + perpX*tickLen*2, y, z + perpZ*tickLen*2);
     group.add(label);
   }
