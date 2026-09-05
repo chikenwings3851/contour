@@ -653,6 +653,12 @@
             <input type="number" id="minSlopePct" step="0.05" min="0" value="0.5" title="Grade segments flatter than this are flagged - flat drains don't self-clean">
           </div>
         </div>
+        <div class="row" style="margin-top:8px;">
+          <div class="gp-field">
+            <label>Freeboard (m)</label>
+            <input type="number" id="freeboard" step="0.05" min="0" value="0.15" title="Margin kept clear at the top of the channel - the design flow depth (and its capacity check) is the total depth minus this">
+          </div>
+        </div>
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
         <div class="datum-note" id="cutFillPrecisionNote"></div>
       </div>
@@ -1692,6 +1698,7 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     sideSlope: parseFloat(document.getElementById('sideSlope').value) || 2,
     manningN: parseFloat(document.getElementById('manningN').value) || 0.03,
     minSlopePct: parseFloat(document.getElementById('minSlopePct').value) || 0.5,
+    freeboard: parseFloat(document.getElementById('freeboard').value) || 0.15,
     unitSystem,
     veMode,
     mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() }
@@ -1729,6 +1736,7 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
     if(data.sideSlope != null) document.getElementById('sideSlope').value = data.sideSlope;
     if(data.manningN != null) document.getElementById('manningN').value = data.manningN;
     if(data.minSlopePct != null) document.getElementById('minSlopePct').value = data.minSlopePct;
+    if(data.freeboard != null) document.getElementById('freeboard').value = data.freeboard;
     unitSystem = data.unitSystem === 'imperial' ? 'imperial' : 'metric';
     document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === unitSystem));
     veMode = data.veMode || 'auto';
@@ -2745,16 +2753,22 @@ async function loadCrossSection(stationDist){
         const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
         const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
         const n = parseFloat(document.getElementById('manningN').value) || 0.03;
+        const freeboard = parseFloat(document.getElementById('freeboard').value) || 0;
+        const totalDepth = Math.abs(diff);
+        const flowDepth = Math.max(0, totalDepth - freeboard);
         const slopeFrac = Math.abs(designSlopeAt(stationDist));
-        const cap = manningCapacity(Math.abs(diff), bottomWidth, sideSlope, n, slopeFrac);
+        const cap = manningCapacity(flowDepth, bottomWidth, sideSlope, n, slopeFrac);
         if(cap){
           const qVal = unitSystem === 'imperial' ? cap.Q * 35.3147 : cap.Q;
           const vVal = unitSystem === 'imperial' ? cap.V * M_TO_FT : cap.V;
           const qUnit = unitSystem === 'imperial' ? 'ft³/s' : 'm³/s';
           const vUnit = unitSystem === 'imperial' ? 'ft/s' : 'm/s';
-          text += ' · capacity Q=' + qVal.toFixed(2) + ' ' + qUnit + ' @ V=' + vVal.toFixed(2) + ' ' + vUnit + ' (n=' + n.toFixed(3) + ')';
+          text += ' · capacity Q=' + qVal.toFixed(2) + ' ' + qUnit + ' @ V=' + vVal.toFixed(2) + ' ' + vUnit +
+            ' (n=' + n.toFixed(3) + ', ' + fmtElev(freeboard) + ' freeboard)';
         } else if(slopeFrac <= 1e-6){
           text += ' · capacity n/a (flat/adverse grade here)';
+        } else if(flowDepth <= 0){
+          text += ' · capacity n/a (freeboard exceeds the available depth here)';
         }
       }
     }
@@ -2882,6 +2896,31 @@ function renderCrossSectionChart(xsPoints, stationDist){
         ]),
         kind: isCut ? 'cut' : 'fill'
       };
+
+      // Water surface at the design flow depth (total depth minus freeboard) - only meaningful for
+      // an actual conveyance channel (a cut), drawn across the DESIGNED template width at that
+      // depth (same regular-trapezoid assumption Manning's capacity uses), not the real ground.
+      if(isCut && depth > 1e-6){
+        const freeboard = parseFloat(document.getElementById('freeboard').value) || 0;
+        const flowDepth = Math.max(0, depth - freeboard);
+        if(flowDepth > 1e-6){
+          const halfWater = halfN + sideSlope * flowDepth;
+          const waterElev = designElevHere + flowDepth;
+          const waterColor = '#0ea5e9';
+          const waterLine = document.createElementNS(NS,'line');
+          waterLine.setAttribute('x1', X(-halfWater)); waterLine.setAttribute('x2', X(halfWater));
+          waterLine.setAttribute('y1', Y(waterElev)); waterLine.setAttribute('y2', Y(waterElev));
+          waterLine.setAttribute('stroke', waterColor); waterLine.setAttribute('stroke-width', '2');
+          waterLine.setAttribute('stroke-dasharray', '5,3');
+          svg.appendChild(waterLine);
+          const waterLabel = document.createElementNS(NS,'text');
+          waterLabel.setAttribute('x', X(halfWater)+6); waterLabel.setAttribute('y', Y(waterElev)+4);
+          waterLabel.setAttribute('font-size','10'); waterLabel.setAttribute('font-family','JetBrains Mono, monospace'); waterLabel.setAttribute('font-weight','700');
+          waterLabel.setAttribute('fill', waterColor);
+          waterLabel.textContent = 'water (' + fmtElev(freeboard) + ' freeboard)';
+          svg.appendChild(waterLabel);
+        }
+      }
     }
   }
 
@@ -3380,6 +3419,9 @@ document.getElementById('btnAddGradePoint').addEventListener('click', () => {
 document.getElementById('bottomWidth').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 document.getElementById('sideSlope').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 document.getElementById('manningN').addEventListener('change', () => {
+  if(xsOpen && xsCurrentStationDist != null) loadCrossSection(xsCurrentStationDist);
+});
+document.getElementById('freeboard').addEventListener('change', () => {
   if(xsOpen && xsCurrentStationDist != null) loadCrossSection(xsCurrentStationDist);
 });
 document.getElementById('minSlopePct').addEventListener('change', () => { if(designGrade) renderGradeEditor(); });
