@@ -473,8 +473,18 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           Add Grade Break Point
         </button>
+        <div class="row" style="margin-top:12px;">
+          <div class="gp-field">
+            <label>Bottom Width (m)</label>
+            <input type="number" id="bottomWidth" step="0.1" min="0" value="1">
+          </div>
+          <div class="gp-field">
+            <label>Side Slope (H:1V)</label>
+            <input type="number" id="sideSlope" step="0.1" min="0" value="2">
+          </div>
+        </div>
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
-        <div class="datum-note">Cut/fill volumes are a rough estimate — ground area between the lines × your corridor width, not a true cross-section takeoff.</div>
+        <div class="datum-note">Volumes use the Average End Area Method with a trapezoidal cross-section (bottom width + side slopes above) — the standard way to estimate earthwork before real survey cross-sections exist. Independent of the corridor width, which only controls how much terrain the 3D view/export shows.</div>
       </div>
     </div>
 
@@ -2289,20 +2299,42 @@ function splitCutFillRuns(prof){
   return runs.filter(r => r.kind !== 'none' && r.points.length >= 2);
 }
 
+// Trapezoidal channel/trench cross-section (flat bottom + two side slopes expressed as a
+// horizontal:1-vertical ratio) - the real cross-section shape, not a stand-in for the 3D
+// viewing corridor. Area = bottom*depth + sideSlope*depth^2 (rectangle + two side triangles).
+function trapezoidArea(depth, bottomWidth, sideSlope){
+  if(depth <= 0) return 0;
+  return bottomWidth*depth + sideSlope*depth*depth;
+}
+
+// Average End Area Method: cross-sectional area computed at every profile sample, consecutive
+// areas averaged and multiplied by the distance between them - the standard way earthwork is
+// estimated from a profile before real surveyed cross-sections exist at every station.
 function computeCutFillStats(){
   const runs = splitCutFillRuns(profile);
-  let cutArea = 0, fillArea = 0, maxCut = null, maxFill = null;
-  for(let i=1;i<profile.length;i++){
-    const a = profile[i-1], b = profile[i];
-    if(a.elev==null || b.elev==null) continue;
-    const da = a.elev - designElevAt(a.dist), db = b.elev - designElevAt(b.dist);
-    const dx = b.dist - a.dist, avg = (da+db)/2;
-    if(avg > 0) cutArea += avg*dx; else fillArea += -avg*dx;
-    if(da > 0 && (!maxCut || da > maxCut.amount)) maxCut = { amount: da, dist: a.dist };
-    if(da < 0 && (!maxFill || -da > maxFill.amount)) maxFill = { amount: -da, dist: a.dist };
+  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
+  const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+  let cutVolume = 0, fillVolume = 0, maxCut = null, maxFill = null;
+
+  runs.forEach(run => {
+    for(let i=1;i<run.points.length;i++){
+      const a = run.points[i-1], b = run.points[i];
+      const depthA = Math.abs(a.elev - a.design), depthB = Math.abs(b.elev - b.design);
+      const areaA = trapezoidArea(depthA, bottomWidth, sideSlope);
+      const areaB = trapezoidArea(depthB, bottomWidth, sideSlope);
+      const dx = b.dist - a.dist;
+      const vol = (areaA + areaB) / 2 * dx;
+      if(run.kind === 'cut') cutVolume += vol; else fillVolume += vol;
+    }
+  });
+
+  for(const p of profile){
+    if(p.elev == null) continue;
+    const diff = p.elev - designElevAt(p.dist);
+    if(diff > 0 && (!maxCut || diff > maxCut.amount)) maxCut = { amount: diff, dist: p.dist };
+    if(diff < 0 && (!maxFill || -diff > maxFill.amount)) maxFill = { amount: -diff, dist: p.dist };
   }
-  const bufferM = parseFloat(document.getElementById('corridorWidth').value) * 2;
-  return { cutVolume: cutArea*bufferM, fillVolume: fillArea*bufferM, maxCut, maxFill, runs };
+  return { cutVolume, fillVolume, maxCut, maxFill, runs, bottomWidth, sideSlope };
 }
 
 document.getElementById('btnAddGrade').addEventListener('click', () => {
@@ -2338,6 +2370,8 @@ document.getElementById('btnAddGradePoint').addEventListener('click', () => {
   renderGradeEditor();
   refreshChart();
 });
+document.getElementById('bottomWidth').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
+document.getElementById('sideSlope').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 
 function renderGradeEditor(){
   if(!designGrade) return;
