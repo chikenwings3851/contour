@@ -487,6 +487,10 @@
           <option value="10">10× exaggeration</option>
           <option value="20">20× exaggeration</option>
         </select>
+        <button class="measure-toggle" title="Click two points on the chart to measure the distance and elevation between them">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21.3 15.3L8.7 2.7a1 1 0 00-1.4 0L2.7 7.3a1 1 0 000 1.4l12.6 12.6a1 1 0 001.4 0l4.6-4.6a1 1 0 000-1.4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14.5 5.5l2 2M11.5 8.5l2 2M8.5 11.5l2 2M17.5 8.5l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          Measure
+        </button>
       </div>
       <div id="chartWrap">
         <div class="chart-tooltip" id="chartTooltip"></div>
@@ -630,6 +634,9 @@
           <button data-unit="metric" class="ghost-active">m</button>
           <button data-unit="imperial">ft</button>
         </div>
+        <button class="measure-toggle icon-btn" title="Click two points on the chart to measure the distance and elevation between them">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M21.3 15.3L8.7 2.7a1 1 0 00-1.4 0L2.7 7.3a1 1 0 000 1.4l12.6 12.6a1 1 0 001.4 0l4.6-4.6a1 1 0 000-1.4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14.5 5.5l2 2M11.5 8.5l2 2M8.5 11.5l2 2M17.5 8.5l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
         <button id="btnCloseModal" class="icon-btn">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
@@ -1017,6 +1024,9 @@ function resetAll(){
   profile = null;
   chartInstances = [];
   chartXView = null;
+  chartMeasure = null;
+  chartMeasureMode = false;
+  document.querySelectorAll('.measure-toggle').forEach(b => b.classList.remove('ghost-active'));
   closeModal();
   closeView3D();
   closeCrossSectionModal();
@@ -1138,6 +1148,7 @@ async function runProfile(){
     if(!allPoints.length) throw new Error('No elevation data returned for this line — it may be outside Ontario or outside LiDAR coverage, or the elevation service may be temporarily unavailable.');
 
     chartXView = null;
+    chartMeasure = null;
     let cum = 0, prev = null;
     profile = allPoints.map(s => {
       if(prev) cum += haversine(prev.lat, prev.lon, s.lat, s.lon);
@@ -2329,7 +2340,7 @@ async function loadCrossSection(stationDist){
   try{
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
     const xsPoints = await fetchCrossSection(stationDist, bufferM);
-    renderCrossSectionChart(xsPoints, stationDist);
+    const xsAreaResult = renderCrossSectionChart(xsPoints, stationDist);
     const valid = xsPoints.filter(p => p.elev != null);
     const left = valid[0], right = valid[valid.length-1];
     const grade = (left && right) ? ((right.elev - left.elev) / (bufferM*2) * 100) : null;
@@ -2340,6 +2351,11 @@ async function loadCrossSection(stationDist){
       if(centreGround && centreGround.elev != null){
         const diff = centreGround.elev - designElevAt(stationDist);
         text += ' · at centreline: ' + (diff>=0 ? 'cut ' : 'fill ') + fmtElev(Math.abs(diff));
+      }
+      if(xsAreaResult){
+        const areaUnit = unitSystem === 'imperial' ? 'ft²' : 'm²';
+        const areaVal = unitSystem === 'imperial' ? xsAreaResult.area * (M_TO_FT*M_TO_FT) : xsAreaResult.area;
+        text += ' · ' + xsAreaResult.kind + ' area ' + areaVal.toFixed(2) + ' ' + areaUnit;
       }
     }
     statusDiv.textContent = text;
@@ -2413,6 +2429,8 @@ function renderCrossSectionChart(xsPoints, stationDist){
   area.setAttribute('d',a); area.setAttribute('fill','rgba(91,91,240,0.15)'); area.setAttribute('stroke','none');
   svg.appendChild(area);
 
+  let xsAreaResult = null; // { area, kind } for the proposed template shape, if a design grade is active - returned to the caller for the status line
+
   // The proposed trapezoid template (bottom width + side slopes) at this one station, using a
   // real per-side daylight search against this exact station's own fetched ground samples
   // (xsPoints) - true accuracy, not the flat-at-centreline shortcut, since this view already has
@@ -2456,6 +2474,14 @@ function renderCrossSectionChart(xsPoints, stationDist){
       shape.setAttribute('stroke', shapeColor); shape.setAttribute('stroke-width','2.25');
       shape.setAttribute('stroke-linejoin','round');
       svg.appendChild(shape);
+
+      xsAreaResult = {
+        area: shoelaceArea([
+          { offset:-halfN, elev:designElevHere }, { offset:halfN, elev:designElevHere },
+          { offset:posPt.offset, elev:posPt.elev }, { offset:negPt.offset, elev:negPt.elev }
+        ]),
+        kind: isCut ? 'cut' : 'fill'
+      };
     }
   }
 
@@ -2522,6 +2548,7 @@ function renderCrossSectionChart(xsPoints, stationDist){
   svg.addEventListener('mouseleave', () => { cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; });
 
   wrap.appendChild(svg);
+  return xsAreaResult;
 }
 
 // ---------- stats ----------
@@ -2652,6 +2679,21 @@ document.addEventListener('mousemove', (ev) => {
   refreshChart();
 });
 document.addEventListener('mouseup', () => { chartPanState = null; });
+
+// Free-form "measure anywhere" tool: click two points on the ground line to see the real distance,
+// elevation difference, and slope between them - independent of the design grade, for things like
+// ditch depth or embankment height that aren't necessarily a cut/fill against a target grade.
+// chartMeasure is null (nothing placed), { a } (first point placed, waiting for the second), or
+// { a, b } (a completed measurement, shown until cleared or superseded by a fresh first click).
+let chartMeasureMode = false, chartMeasure = null;
+document.querySelectorAll('.measure-toggle').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    chartMeasureMode = !chartMeasureMode;
+    document.querySelectorAll('.measure-toggle').forEach(b => b.classList.toggle('ghost-active', chartMeasureMode));
+    if(!chartMeasureMode) chartMeasure = null;
+    if(profile) refreshChart();
+  });
+});
 
 // Design elevation at any distance, extrapolating past the first/last point using that segment's
 // own slope so cut/fill stays defined even if a point gets dragged inside the line's real extent.
@@ -3225,6 +3267,61 @@ function renderChartInto(prof, wrap, tooltip, expanded){
     }
   }
 
+  // The free-form measure tool's markers + dimension line/label. Rendered as real SVG (not an HTML
+  // overlay) so it survives into the PNG export like everything else on the chart.
+  if(chartMeasure){
+    const measureColor = '#a855f7';
+    const drawPointMarker = (pt) => {
+      if(pt.dist < xMinM || pt.dist > xMaxM) return;
+      const mx = X(pt.dist), my = Y(pt.elev);
+      const m = document.createElementNS(NS,'circle');
+      m.setAttribute('cx', mx); m.setAttribute('cy', my); m.setAttribute('r', expanded ? '6' : '5');
+      m.setAttribute('fill', measureColor); m.setAttribute('stroke', '#fff'); m.setAttribute('stroke-width', '2');
+      svg.appendChild(m);
+    };
+    drawPointMarker(chartMeasure.a);
+    if(chartMeasure.b){
+      drawPointMarker(chartMeasure.b);
+      const ax = X(chartMeasure.a.dist), ay = Y(chartMeasure.a.elev);
+      const bx = X(chartMeasure.b.dist), by = Y(chartMeasure.b.elev);
+      const connector = document.createElementNS(NS,'line');
+      connector.setAttribute('x1', ax); connector.setAttribute('y1', ay);
+      connector.setAttribute('x2', bx); connector.setAttribute('y2', by);
+      connector.setAttribute('stroke', measureColor); connector.setAttribute('stroke-width', '2');
+      connector.setAttribute('stroke-dasharray', '6,4');
+      svg.appendChild(connector);
+
+      const distApart = Math.abs(chartMeasure.b.dist - chartMeasure.a.dist);
+      const elevDiff = chartMeasure.b.elev - chartMeasure.a.elev;
+      const slopePct = distApart > 1e-6 ? (elevDiff / distApart) * 100 : 0;
+      const lines = [
+        fmtDist(distApart) + ' apart',
+        (elevDiff >= 0 ? '↗ ' : '↘ ') + fmtElev(Math.abs(elevDiff)) + ' ' + (elevDiff >= 0 ? 'rise' : 'fall'),
+        Math.abs(slopePct).toFixed(1) + '% slope'
+      ];
+      const lblX = Math.min(Math.max((ax+bx)/2, pad.l+62), w-pad.r-62);
+      const lblY = Math.min(ay, by) - 14;
+      const lineH = expanded ? 15 : 13;
+      const boxW = 124, boxH = lines.length*lineH + 10;
+      const boxY = Math.max(pad.t+2, lblY - boxH);
+      const box = document.createElementNS(NS,'rect');
+      box.setAttribute('x', lblX-boxW/2); box.setAttribute('y', boxY);
+      box.setAttribute('width', boxW); box.setAttribute('height', boxH);
+      box.setAttribute('rx', '7'); box.setAttribute('fill', PALETTE.text); box.setAttribute('fill-opacity', '0.94');
+      svg.appendChild(box);
+      const lineColors = ['#fff', elevDiff >= 0 ? '#6be0ac' : '#ff9a90', '#c7ccdb'];
+      lines.forEach((ln, i) => {
+        const t = document.createElementNS(NS,'text');
+        t.setAttribute('x', lblX); t.setAttribute('y', boxY + 16 + i*lineH);
+        t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-family', 'JetBrains Mono, monospace');
+        t.setAttribute('font-size', i===0 ? '11' : '10.5'); t.setAttribute('font-weight', i===0 ? '700' : '500');
+        t.setAttribute('fill', lineColors[i]);
+        t.textContent = ln;
+        svg.appendChild(t);
+      });
+    }
+  }
+
   const dot = document.createElementNS(NS,'circle');
   dot.setAttribute('r', expanded ? '5' : '4'); dot.setAttribute('fill','#ffffff');
   dot.setAttribute('stroke', PALETTE.accentDark); dot.setAttribute('stroke-width','2.5');
@@ -3271,10 +3368,35 @@ function renderChartInto(prof, wrap, tooltip, expanded){
     refreshChart();
   }, { passive: false });
   svg.addEventListener('mousedown', (ev) => {
-    if(gradeDragState.active) return; // a grade handle's own mousedown already stopped propagation anyway
+    if(gradeDragState.active || chartMeasureMode) return; // a grade handle's own mousedown already stopped propagation anyway; measure mode uses click, not drag-to-pan
     chartPanState = { startClientX: ev.clientX, startMin: xMinM, startMax: xMaxM, w, pad, fullMaxM };
   });
-  svg.addEventListener('dblclick', () => { chartXView = null; refreshChart(); });
+  svg.addEventListener('dblclick', () => { if(!chartMeasureMode){ chartXView = null; refreshChart(); } });
+
+  // Measure tool: each click places the next point (real ground samples only, snapped to the
+  // nearest actual profile sample so the numbers reflect real data, not an arbitrary pixel).
+  // A completed a+b measurement is superseded by starting fresh on the next click rather than
+  // requiring an explicit clear.
+  svg.addEventListener('click', (ev) => {
+    if(!chartMeasureMode) return;
+    const rect = svg.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    if(mx < pad.l || mx > w - pad.r) return;
+    const dM = xMinM + (mx - pad.l) / (w - pad.l - pad.r) * (xMaxM - xMinM);
+    let nearestIdx = 0, best = Infinity;
+    for(let i=0;i<prof.length;i++){
+      const diff = Math.abs(prof[i].dist - dM);
+      if(diff < best){ best = diff; nearestIdx = i; }
+    }
+    const p = prof[nearestIdx];
+    if(p.elev == null) return;
+    if(!chartMeasure || (chartMeasure.a && chartMeasure.b)){
+      chartMeasure = { a: { dist: p.dist, elev: p.elev } };
+    } else {
+      chartMeasure.b = { dist: p.dist, elev: p.elev };
+    }
+    refreshChart();
+  });
 
   wrap.appendChild(svg);
 }
