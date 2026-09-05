@@ -2793,21 +2793,29 @@ function findDaylightPoint(design, halfN, sideSlope, isCut, sign, groundLookup){
   let prevOffset = sign * halfN, prevElev = design;
   let prevGround = groundLookup(prevOffset);
   if(prevGround == null) return null;
+  // Real terrain isn't always monotonic moving away from the centreline - it can dip, let the
+  // slope surface poke above/below it, then hump back over the slope before the ground truly
+  // settles. Stopping at the FIRST crossing (as this used to) reports "daylight" at that dip even
+  // though more of the hillside still needs cutting/filling beyond it. Instead, walk the whole
+  // search range and keep the LAST crossing found - the point after which the slope stays clear of
+  // the real ground for the rest of the available data, which is the actual daylight point.
+  let lastCrossing = null;
   for(let h = stepH; h <= maxH; h += stepH){
     const offset = sign * halfN + sign * sideSlope * h;
     const elev = isCut ? design + h : design - h;
     const ground = groundLookup(offset);
-    if(ground == null) return null;
+    if(ground == null) break; // ran out of real data - use whatever crossing (if any) was already found
     const wasEnclosed = isCut ? (prevElev < prevGround) : (prevElev > prevGround);
     const nowEnclosed = isCut ? (elev < ground) : (elev > ground);
     if(wasEnclosed && !nowEnclosed){
       const dElev = elev - prevElev, dGround = ground - prevGround;
       const denom = dElev - dGround;
       const t = Math.abs(denom) < 1e-9 ? 0.5 : Math.max(0, Math.min(1, (prevGround - prevElev) / denom));
-      return { offset: prevOffset + (offset - prevOffset) * t, elev: prevElev + dElev * t };
+      lastCrossing = { offset: prevOffset + (offset - prevOffset) * t, elev: prevElev + dElev * t };
     }
     prevOffset = offset; prevElev = elev; prevGround = ground;
   }
+  if(lastCrossing) return lastCrossing;
   return { offset: prevOffset, elev: prevElev }; // never crossed within maxH - extremely steep/deep edge case
 }
 
