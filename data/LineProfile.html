@@ -535,6 +535,17 @@
         </button>
         <input type="file" id="dxfFileInput" accept=".dxf" style="display:none;">
       </div>
+      <div class="row" style="margin-top:10px;">
+        <button id="btnSaveProject" title="Save this line, profile, and design grade to a file you can reopen later" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 14h8v6H8v-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          Save Project
+        </button>
+        <button id="btnOpenProject" title="Reopen a previously saved project file">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          Open Project
+        </button>
+        <input type="file" id="projectFileInput" accept=".json" style="display:none;">
+      </div>
       <div id="status" style="margin-top:12px;">Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.</div>
       <div id="progressBarWrap" style="display:none;">
         <div id="progressBarTrack"><div id="progressBarFill"></div></div>
@@ -1296,6 +1307,7 @@ function resetAll(){
   document.getElementById('gradeCard').style.display = 'none';
   document.getElementById('surveyCard').style.display = 'none';
   document.getElementById('exportCard').style.display = 'none';
+  document.getElementById('btnSaveProject').disabled = true;
   document.getElementById('chartWrap').querySelectorAll('svg').forEach(n=>n.remove());
 }
 
@@ -1432,35 +1444,47 @@ async function runProfile(){
     const validCount = profile.filter(p => p.elev != null).length;
     if(validCount === 0) throw new Error('No valid elevation values along this line (outside LiDAR coverage).');
 
-    lastLength = length;
-    if(drawLine){
-      drawLine.setStyle({ color: PALETTE.doneLine, dashArray: null });
-      // A thin line is hard to hover precisely, so an invisible wide-stroke twin sits on
-      // top purely to catch the mouse — much more forgiving without changing how the line looks.
-      if(hitLine) map.removeLayer(hitLine);
-      hitLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:'#000', weight:60, opacity:0 }).addTo(map);
-      hitLine.on('mousemove', onLineHover);
-      hitLine.on('mouseout', hideStation);
-      buildEditHandles();
-    }
-
-    document.getElementById('emptyCard').style.display = 'none';
-    renderStats(profile, length);
-    refreshChart();
-    document.getElementById('exportCard').style.display = '';
-    document.getElementById('gradeCard').style.display = '';
-    loadSurveyCoverage(profile, myRequestId); // best-effort, doesn't block the main profile
-
     const notes = [];
     if(validCount < profile.length) notes.push((profile.length - validCount) + ' gaps, no data');
     if(failedChunks > 0) notes.push(failedChunks + ' of ' + chunkCount + ' segments could not be retrieved after retrying — the elevation service was intermittently unavailable');
-    statusEl.innerHTML = 'Profile built from <b>' + profile.length + '</b> sample points' + (notes.length ? ' (' + notes.join('; ') + ')' : '') + '. Hover the line to track a station. Draw a new line, or Clear.';
+    finalizeProfile(length, myRequestId, 'Profile built from <b>' + profile.length + '</b> sample points' + (notes.length ? ' (' + notes.join('; ') + ')' : '') + '. Hover the line to track a station. Draw a new line, or Clear.');
   } catch(err){
     if(myRequestId !== profileRequestId) return; // a newer line already took over — don't show a stale error
     hideProgressBar();
     statusEl.className = 'err';
     statusEl.textContent = 'Could not build profile: ' + err.message;
   }
+}
+
+// Everything that happens once `profile` is populated and ready to show, regardless of whether it
+// just came from a live LiDAR fetch (runProfile) or was restored straight from a saved project
+// file (loadProject) - shared so the two paths can never drift apart from each other.
+function finalizeProfile(length, myRequestId, statusHtml){
+  lastLength = length;
+  const coords = vertices.map(v => [v.lat, v.lng]);
+  if(!drawLine){
+    drawLine = L.polyline(coords, { color: PALETTE.doneLine }).addTo(map);
+  } else {
+    drawLine.setLatLngs(coords);
+    drawLine.setStyle({ color: PALETTE.doneLine, dashArray: null });
+  }
+  // A thin line is hard to hover precisely, so an invisible wide-stroke twin sits on top purely
+  // to catch the mouse - much more forgiving without changing how the line looks.
+  if(hitLine) map.removeLayer(hitLine);
+  hitLine = L.polyline(coords, { color:'#000', weight:60, opacity:0 }).addTo(map);
+  hitLine.on('mousemove', onLineHover);
+  hitLine.on('mouseout', hideStation);
+  buildEditHandles();
+
+  document.getElementById('emptyCard').style.display = 'none';
+  renderStats(profile, length);
+  refreshChart();
+  document.getElementById('exportCard').style.display = '';
+  document.getElementById('gradeCard').style.display = '';
+  document.getElementById('btnSaveProject').disabled = false;
+  loadSurveyCoverage(profile, myRequestId); // best-effort, doesn't block the main profile
+  statusEl.className = '';
+  statusEl.innerHTML = statusHtml;
 }
 
 function escHtml(s){
@@ -1643,6 +1667,87 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
   } catch(err){
     statusEl.className = 'err';
     statusEl.textContent = 'DXF import failed: ' + err.message;
+  }
+});
+
+// ---------- save / reopen project ----------
+// Persists everything needed to pick up exactly where you left off: the drawn line, the already-
+// fetched elevation profile (so reopening is instant - no re-fetch against the LiDAR service), and
+// the whole design grade + channel/hydraulic setup. Deliberately a plain downloaded/opened file
+// rather than browser storage, since this file already lives and travels as a single portable HTML
+// document with no server of its own - a save file fits that same "just a file, no account, no
+// server" model instead of being invisibly tied to one browser profile.
+
+document.getElementById('btnSaveProject').addEventListener('click', () => {
+  if(!profile) return;
+  const data = {
+    contourProject: true,
+    version: 1,
+    savedAt: new Date().toISOString(),
+    vertices,
+    profile,
+    lastLength,
+    designGrade,
+    bottomWidth: parseFloat(document.getElementById('bottomWidth').value) || 1,
+    sideSlope: parseFloat(document.getElementById('sideSlope').value) || 2,
+    manningN: parseFloat(document.getElementById('manningN').value) || 0.03,
+    minSlopePct: parseFloat(document.getElementById('minSlopePct').value) || 0.5,
+    unitSystem,
+    veMode,
+    mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() }
+  };
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'contour-project-' + Date.now() + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Project saved');
+});
+
+document.getElementById('btnOpenProject').addEventListener('click', () => {
+  document.getElementById('projectFileInput').click();
+});
+document.getElementById('projectFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  statusEl.className = '';
+  statusEl.innerHTML = 'Reading ' + file.name + '…';
+  try{
+    const data = JSON.parse(await file.text());
+    if(!data.contourProject || !Array.isArray(data.vertices) || !Array.isArray(data.profile) || data.vertices.length < 2 || data.profile.length < 2){
+      throw new Error('This doesn\'t look like a Contour project file.');
+    }
+    resetAll();
+    vertices = data.vertices;
+    profile = data.profile;
+    const length = data.lastLength || pathLength(vertices);
+
+    if(data.bottomWidth != null) document.getElementById('bottomWidth').value = data.bottomWidth;
+    if(data.sideSlope != null) document.getElementById('sideSlope').value = data.sideSlope;
+    if(data.manningN != null) document.getElementById('manningN').value = data.manningN;
+    if(data.minSlopePct != null) document.getElementById('minSlopePct').value = data.minSlopePct;
+    unitSystem = data.unitSystem === 'imperial' ? 'imperial' : 'metric';
+    document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === unitSystem));
+    veMode = data.veMode || 'auto';
+    document.querySelectorAll('.ve-select').forEach(s => { s.value = veMode; });
+
+    if(data.designGrade && Array.isArray(data.designGrade.points) && data.designGrade.points.length >= 2){
+      designGrade = data.designGrade;
+      designGradeNextId = Math.max(1, ...designGrade.points.map(p => (p.id||0) + 1));
+      document.getElementById('gradeEmptyState').style.display = 'none';
+      document.getElementById('gradeEditor').style.display = '';
+      renderGradeEditor();
+    }
+
+    finalizeProfile(length, ++profileRequestId, 'Project reopened — ' + profile.length + ' sample points' + (designGrade ? ' with its design grade' : '') + '. Hover the line to track a station.');
+    if(data.mapView) map.setView([data.mapView.lat, data.mapView.lng], data.mapView.zoom);
+    showToast('Project loaded');
+  } catch(err){
+    statusEl.className = 'err';
+    statusEl.textContent = 'Could not open project: ' + err.message;
   }
 });
 
