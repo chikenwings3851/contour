@@ -126,12 +126,15 @@
     border-radius:var(--radius-sm);
     padding:9px 13px;
     cursor:pointer;
-    transition:all .12s;
+    transition:background-color .12s, border-color .12s, box-shadow .12s, transform .08s, filter .12s;
     display:inline-flex;align-items:center;gap:6px;
   }
   button svg{flex:none;}
   button:hover{background:var(--surface-2);border-color:#c3c8d9;}
+  button:active{transform:translateY(1px);}
+  button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-soft);}
   button:disabled{opacity:0.4;cursor:not-allowed;}
+  button:disabled:active{transform:none;}
   button.primary{
     background:linear-gradient(135deg,#6a6af5,#4f4fe8);
     border-color:transparent;color:#fff;
@@ -190,21 +193,53 @@
   .stats-grid{
     display:grid;
     grid-template-columns:1fr 1fr;
-    gap:10px;
+    gap:8px;
   }
+  .stats-grid.with-hero{grid-template-columns:1fr 1fr;}
   .stat{
+    position:relative;
     display:flex;
     flex-direction:column;
     gap:3px;
     background:var(--surface-2);
     border:1px solid var(--border);
     border-radius:10px;
-    padding:10px 12px;
+    padding:10px 12px 10px 14px;
+    overflow:hidden;
   }
-  .stat .label{font-size:10.5px;color:var(--text-faint);font-weight:700;text-transform:uppercase;letter-spacing:0.4px;}
-  .stat .value{font-family:var(--font-mono);font-size:14.5px;font-weight:600;color:var(--text);}
+  .stat::before{
+    content:'';
+    position:absolute;left:0;top:0;bottom:0;width:3px;
+    background:var(--border-strong);
+  }
+  .stat.rise::before{background:var(--accent-dark);}
+  .stat.fall::before{background:var(--success);}
+  .stat.cut::before{background:var(--danger);}
+  .stat.cut .value{color:var(--danger);}
+  .stat.fillvol::before{background:var(--success);}
+  .stat.fillvol .value{color:var(--success);}
+  .stat .label{font-size:10px;color:var(--text-faint);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;gap:4px;}
+  .stat .value{font-family:var(--font-mono);font-size:14.5px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;letter-spacing:-0.2px;}
   .stat .value.rise{color:var(--accent-dark);}
   .stat .value.fall{color:var(--success);}
+  .stat .sub{font-size:10.5px;color:var(--text-faint);font-family:var(--font-mono);margin-top:1px;}
+  .stat.hero{
+    grid-column:span 1;
+    background:linear-gradient(165deg,var(--surface) 0%,var(--surface-2) 100%);
+    padding:13px 14px 13px 17px;
+  }
+  .stat.hero::before{width:4px;}
+  .stat.hero:not(.cut):not(.fillvol):not(.rise):not(.fall)::before{background:var(--accent-dark);}
+  .stat.hero .label{font-size:10.5px;color:var(--text-dim);}
+  .stat.hero .value{font-size:22px;font-weight:700;letter-spacing:-0.5px;}
+  .stat.hero .value .unit{font-size:13px;font-weight:600;color:var(--text-faint);margin-left:3px;letter-spacing:0;}
+  .stat.wide{grid-column:1 / -1;}
+  .range-bar{position:relative;height:6px;border-radius:100px;background:var(--border);margin:8px 1px 3px;overflow:visible;}
+  .range-bar .fill{position:absolute;top:0;bottom:0;border-radius:100px;background:linear-gradient(90deg,var(--accent-2),var(--accent));}
+  .range-bar .marker{position:absolute;top:50%;width:8px;height:8px;border-radius:50%;background:var(--surface);border:2px solid var(--accent-dark);transform:translate(-50%,-50%);}
+  .range-bar .marker.end-marker{border-color:var(--text-dim);}
+  .range-labels{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:2px;}
+  .stats-footnote{font-size:10.5px;color:var(--text-faint);margin-top:8px;text-align:right;font-family:var(--font-mono);}
   .chart-controls{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
   #chartWrap, .modal-chart-wrap{
     background:var(--surface-2);
@@ -216,16 +251,23 @@
     position:absolute;
     pointer-events:none;
     background:var(--text);
-    border-radius:8px;
-    padding:6px 10px;
+    border-radius:9px;
+    padding:8px 11px;
     font-family:var(--font-mono);
-    font-size:11.5px;
+    font-size:11px;
+    line-height:1.55;
     color:#fff;
     white-space:nowrap;
     display:none;
     z-index:5;
-    box-shadow:var(--shadow-md);
+    box-shadow:0 10px 26px rgba(20,22,40,.30), 0 2px 6px rgba(20,22,40,.18);
   }
+  .chart-tooltip .tt-station{font-weight:700;font-size:11.5px;letter-spacing:0.1px;}
+  .chart-tooltip .tt-elev{color:#c7ccdb;}
+  .chart-tooltip .tt-design{color:#a9c4ff;margin-top:3px;padding-top:3px;border-top:1px solid rgba(255,255,255,.14);}
+  .chart-tooltip .tt-diff{font-weight:700;}
+  .chart-tooltip .tt-diff.cut{color:#ff9a90;}
+  .chart-tooltip .tt-diff.fill{color:#6be0ac;}
   .datum-note{font-size:10.5px;color:var(--text-faint);margin-top:9px;line-height:1.5;}
   #gradePointsList{display:flex;flex-direction:column;gap:8px;}
   .grade-point-row{display:flex;align-items:center;gap:6px;}
@@ -426,6 +468,7 @@
         </div>
       </div>
       <div class="stats-grid" id="statsGrid"></div>
+      <div class="stats-footnote" id="statsFootnote"></div>
     </div>
 
     <div class="card" id="chartCard" style="display:none;">
@@ -2337,9 +2380,14 @@ function renderCrossSectionChart(xsPoints, stationDist){
     const line = document.createElementNS(NS,'line');
     line.setAttribute('x1',pad.l); line.setAttribute('x2',w-pad.r); line.setAttribute('y1',y); line.setAttribute('y2',y);
     line.setAttribute('stroke', PALETTE.gridLine); line.setAttribute('stroke-width','1');
+    if(i>0 && i<4) line.setAttribute('stroke-dasharray', '1,4');
     svg.appendChild(line);
+    const tick = document.createElementNS(NS,'line');
+    tick.setAttribute('x1', pad.l-4); tick.setAttribute('x2', pad.l); tick.setAttribute('y1', y); tick.setAttribute('y2', y);
+    tick.setAttribute('stroke', PALETTE.axisLine); tick.setAttribute('stroke-width','1');
+    svg.appendChild(tick);
     const label = document.createElementNS(NS,'text');
-    label.setAttribute('x',pad.l-8); label.setAttribute('y',y+3); label.setAttribute('text-anchor','end');
+    label.setAttribute('x',pad.l-9); label.setAttribute('y',y+3); label.setAttribute('text-anchor','end');
     label.setAttribute('font-size','10'); label.setAttribute('font-family','JetBrains Mono, monospace'); label.setAttribute('fill',PALETTE.axisText);
     label.textContent = elevValue(e).toFixed(1);
     svg.appendChild(label);
@@ -2469,7 +2517,7 @@ function renderCrossSectionChart(xsPoints, stationDist){
     tooltip.style.display = '';
     tooltip.style.left = Math.min(x+8, w-140)+'px';
     tooltip.style.top = Math.max(y-40,2)+'px';
-    tooltip.innerHTML = fmtDist(Math.abs(nearest.offset)) + (nearest.offset<0?' L':(nearest.offset>0?' R':' (centre)')) + '<br>elev ' + fmtElev(nearest.elev);
+    tooltip.innerHTML = '<div class="tt-station">' + fmtDist(Math.abs(nearest.offset)) + (nearest.offset<0?' L':(nearest.offset>0?' R':' (centre)')) + '</div><div class="tt-elev">' + fmtElev(nearest.elev) + '</div>';
   });
   svg.addEventListener('mouseleave', () => { cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; });
 
@@ -2490,23 +2538,38 @@ function renderStats(prof, length){
     if(elevs[i].elev > maxP.elev) maxP = elevs[i];
   }
   const netGrade = length > 0 ? ((last.elev - first.elev) / length * 100) : 0;
+  const gradeSign = netGrade > 0.005 ? 'rise' : (netGrade < -0.005 ? 'fall' : '');
+  const gradeArrow = netGrade > 0.005 ? '↗' : (netGrade < -0.005 ? '↘' : '→');
 
-  const stats = [
-    ['Length', fmtDist(length), ''],
-    ['Sample Points', String(prof.length), ''],
-    ['Start Elev.', fmtElev(first.elev), ''],
-    ['End Elev.', fmtElev(last.elev), ''],
-    ['Min Elev.', fmtElev(minP.elev) + ' @ ' + fmtDist(minP.dist), ''],
-    ['Max Elev.', fmtElev(maxP.elev) + ' @ ' + fmtDist(maxP.dist), ''],
-    ['Total Rise', fmtElev(rise), 'rise'],
-    ['Total Fall', fmtElev(fall), 'fall'],
-    ['Net Grade', netGrade.toFixed(2) + ' %', '']
-  ];
+  // A quick visual read on where the start/end of the line sit within its own overall relief -
+  // more useful at a glance than two separate Min/Max tiles, and a nicer use of the space.
+  const span = Math.max(maxP.elev - minP.elev, 0.001);
+  const startPct = ((first.elev - minP.elev) / span) * 100;
+  const endPct = ((last.elev - minP.elev) / span) * 100;
 
   const grid = document.getElementById('statsGrid');
-  grid.innerHTML = stats.map(([label,value,cls]) =>
-    '<div class="stat"><div class="label">' + label + '</div><div class="value' + (cls?' '+cls:'') + '">' + value + '</div></div>'
-  ).join('');
+  grid.innerHTML =
+    '<div class="stat hero"><div class="label">Length</div><div class="value">' + fmtDist(length) + '</div></div>' +
+    '<div class="stat hero' + (gradeSign ? ' '+gradeSign : '') + '"><div class="label">Net Grade</div>' +
+      '<div class="value' + (gradeSign ? ' '+gradeSign : '') + '">' + gradeArrow + ' ' + Math.abs(netGrade).toFixed(2) + '<span class="unit">%</span></div></div>' +
+
+    '<div class="stat"><div class="label">Start Elevation</div><div class="value">' + fmtElev(first.elev) + '</div></div>' +
+    '<div class="stat"><div class="label">End Elevation</div><div class="value">' + fmtElev(last.elev) + '</div></div>' +
+
+    '<div class="stat wide">' +
+      '<div class="label">Elevation Range</div>' +
+      '<div class="value">' + fmtElev(minP.elev) + ' – ' + fmtElev(maxP.elev) + '</div>' +
+      '<div class="range-bar"><div class="fill" style="left:0;right:0;"></div>' +
+        '<div class="marker end-marker" style="left:' + endPct.toFixed(1) + '%;" title="End elevation"></div>' +
+        '<div class="marker" style="left:' + startPct.toFixed(1) + '%;" title="Start elevation"></div>' +
+      '</div>' +
+      '<div class="range-labels"><span>min @ ' + fmtStation(minP.dist) + '</span><span>max @ ' + fmtStation(maxP.dist) + '</span></div>' +
+    '</div>' +
+
+    '<div class="stat rise"><div class="label">Total Rise</div><div class="value rise">' + fmtElev(rise) + '</div></div>' +
+    '<div class="stat fall"><div class="label">Total Fall</div><div class="value fall">' + fmtElev(fall) + '</div></div>';
+
+  document.getElementById('statsFootnote').textContent = prof.length + ' sample points along the line';
   document.getElementById('statsCard').style.display = '';
 }
 
@@ -2873,15 +2936,11 @@ function renderGradeEditor(){
 function renderCutFillStats(){
   if(!designGrade) return;
   const { cutVolume, fillVolume, maxCut, maxFill, precise } = computeCutFillStats();
-  const rows = [
-    [precise ? 'Total Cut (precise)' : 'Total Cut (est.)', volumeStr(cutVolume), 'fall'],
-    [precise ? 'Total Fill (precise)' : 'Total Fill (est.)', volumeStr(fillVolume), 'rise'],
-    ['Max Cut', maxCut ? fmtElev(maxCut.amount) + ' @ ' + fmtStation(maxCut.dist) : '—', ''],
-    ['Max Fill', maxFill ? fmtElev(maxFill.amount) + ' @ ' + fmtStation(maxFill.dist) : '—', '']
-  ];
-  document.getElementById('cutFillStats').innerHTML = rows.map(([label,value,cls]) =>
-    '<div class="stat"><div class="label">' + label + '</div><div class="value' + (cls?' '+cls:'') + '">' + value + '</div></div>'
-  ).join('');
+  document.getElementById('cutFillStats').innerHTML =
+    '<div class="stat hero cut"><div class="label">Total Cut ' + (precise?'· precise':'· est.') + '</div><div class="value">' + volumeStr(cutVolume) + '</div></div>' +
+    '<div class="stat hero fillvol"><div class="label">Total Fill ' + (precise?'· precise':'· est.') + '</div><div class="value">' + volumeStr(fillVolume) + '</div></div>' +
+    '<div class="stat cut"><div class="label">Max Cut</div><div class="value">' + (maxCut ? fmtElev(maxCut.amount) : '—') + '</div>' + (maxCut ? '<div class="sub">@ ' + fmtStation(maxCut.dist) + '</div>' : '') + '</div>' +
+    '<div class="stat fillvol"><div class="label">Max Fill</div><div class="value">' + (maxFill ? fmtElev(maxFill.amount) : '—') + '</div>' + (maxFill ? '<div class="sub">@ ' + fmtStation(maxFill.dist) + '</div>' : '') + '</div>';
   document.getElementById('cutFillPrecisionNote').textContent = precise
     ? 'Volumes use a real per-side daylight search against the fetched corridor terrain (Average End Area Method) — bottom width + side slopes above, independent of the corridor width slider, which only controls how much terrain the 3D view/export shows.'
     : 'Volumes use a fast estimate (Average End Area Method, flat ground assumed on both sides at the centreline elevation). Open the 3D Terrain view once to unlock precise per-side volumes using the real fetched ground.';
@@ -2978,12 +3037,24 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   grad.setAttribute('id', gradId);
   grad.setAttribute('x1','0'); grad.setAttribute('y1','0');
   grad.setAttribute('x2','0'); grad.setAttribute('y2','1');
-  const stop1 = document.createElementNS(NS,'stop');
-  stop1.setAttribute('offset','0%'); stop1.setAttribute('stop-color', PALETTE.accent); stop1.setAttribute('stop-opacity','0.28');
-  const stop2 = document.createElementNS(NS,'stop');
-  stop2.setAttribute('offset','100%'); stop2.setAttribute('stop-color', PALETTE.accent); stop2.setAttribute('stop-opacity','0.02');
-  grad.appendChild(stop1); grad.appendChild(stop2);
+  [['0%','0.32'], ['55%','0.10'], ['100%','0.015']].forEach(([offset,opacity]) => {
+    const stop = document.createElementNS(NS,'stop');
+    stop.setAttribute('offset', offset); stop.setAttribute('stop-color', PALETTE.accent); stop.setAttribute('stop-opacity', opacity);
+    grad.appendChild(stop);
+  });
   defs.appendChild(grad);
+
+  // A soft shadow under the ground line itself - the one bit of depth a flat engineering chart
+  // can afford without looking decorative, since the line is the single most important series here.
+  const shadowId = 'lineShadow' + (expanded ? 'Modal' : 'Main');
+  const filter = document.createElementNS(NS,'filter');
+  filter.setAttribute('id', shadowId);
+  filter.setAttribute('x','-20%'); filter.setAttribute('y','-20%'); filter.setAttribute('width','140%'); filter.setAttribute('height','140%');
+  const feDrop = document.createElementNS(NS,'feDropShadow');
+  feDrop.setAttribute('dx','0'); feDrop.setAttribute('dy','1.5'); feDrop.setAttribute('stdDeviation','2');
+  feDrop.setAttribute('flood-color', PALETTE.accentDark); feDrop.setAttribute('flood-opacity','0.22');
+  filter.appendChild(feDrop);
+  defs.appendChild(filter);
   svg.appendChild(defs);
 
   const X = d => pad.l + (d - xMinM) / (xMaxM - xMinM) * (w - pad.l - pad.r);
@@ -2998,9 +3069,15 @@ function renderChartInto(prof, wrap, tooltip, expanded){
     line.setAttribute('x1', pad.l); line.setAttribute('x2', w - pad.r);
     line.setAttribute('y1', y); line.setAttribute('y2', y);
     line.setAttribute('stroke', PALETTE.gridLine); line.setAttribute('stroke-width', '1');
+    if(i>0 && i<gridN) line.setAttribute('stroke-dasharray', '1,4'); // dotted for interior lines - only the axis edges are solid
     svg.appendChild(line);
+    const tick = document.createElementNS(NS,'line');
+    tick.setAttribute('x1', pad.l-4); tick.setAttribute('x2', pad.l);
+    tick.setAttribute('y1', y); tick.setAttribute('y2', y);
+    tick.setAttribute('stroke', PALETTE.axisLine); tick.setAttribute('stroke-width', '1');
+    svg.appendChild(tick);
     const label = document.createElementNS(NS,'text');
-    label.setAttribute('x', pad.l - 8); label.setAttribute('y', y + 3);
+    label.setAttribute('x', pad.l - 9); label.setAttribute('y', y + 3);
     label.setAttribute('text-anchor','end');
     label.setAttribute('font-size','10'); label.setAttribute('font-family','JetBrains Mono, monospace');
     label.setAttribute('fill', PALETTE.axisText);
@@ -3011,6 +3088,14 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   for(let i=0;i<=xTicks;i++){
     const dM = xMinM + (xMaxM - xMinM) * i / xTicks;
     const x = X(dM);
+    if(i>0 && i<xTicks){
+      const vline = document.createElementNS(NS,'line');
+      vline.setAttribute('x1', x); vline.setAttribute('x2', x);
+      vline.setAttribute('y1', pad.t); vline.setAttribute('y2', h-pad.b);
+      vline.setAttribute('stroke', PALETTE.gridLine); vline.setAttribute('stroke-width', '1');
+      vline.setAttribute('stroke-dasharray', '1,4');
+      svg.appendChild(vline);
+    }
     const label = document.createElementNS(NS,'text');
     label.setAttribute('x', x); label.setAttribute('y', h - pad.b + 17);
     label.setAttribute('text-anchor', i===0 ? 'start' : (i===xTicks ? 'end' : 'middle'));
@@ -3051,6 +3136,7 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   lineEl.setAttribute('stroke-width', expanded ? '2.75' : '2.25');
   lineEl.setAttribute('stroke-linejoin', 'round');
   lineEl.setAttribute('stroke-linecap', 'round');
+  lineEl.setAttribute('filter', 'url(#' + shadowId + ')');
   svg.appendChild(lineEl);
 
   if(designGrade){
@@ -3203,13 +3289,14 @@ function showStation(idx, fromMap){
     ci.dot.setAttribute('cx', x); ci.dot.setAttribute('cy', y);
     ci.dot.style.display = '';
     ci.tooltip.style.display = '';
-    ci.tooltip.style.left = Math.min(x + 8, ci.w - 140) + 'px';
-    ci.tooltip.style.top = Math.max(y - 44, 2) + 'px';
-    let tip = fmtStation(p.dist) + '<br>elev ' + fmtElev(p.elev);
+    ci.tooltip.style.left = Math.min(x + 8, ci.w - 152) + 'px';
+    ci.tooltip.style.top = Math.max(y - (designGrade ? 68 : 44), 2) + 'px';
+    let tip = '<div class="tt-station">' + fmtStation(p.dist) + '</div><div class="tt-elev">' + fmtElev(p.elev) + '</div>';
     if(designGrade){
       const design = designElevAt(p.dist);
       const diff = p.elev - design;
-      tip += '<br>design ' + fmtElev(design) + '<br>' + (diff>=0 ? 'cut ' : 'fill ') + fmtElev(Math.abs(diff));
+      const kind = diff >= 0 ? 'cut' : 'fill';
+      tip += '<div class="tt-design">design ' + fmtElev(design) + '</div><div class="tt-diff ' + kind + '">' + kind + ' ' + fmtElev(Math.abs(diff)) + '</div>';
     }
     ci.tooltip.innerHTML = tip;
   });
