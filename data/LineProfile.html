@@ -339,6 +339,7 @@
   }
   .gc-badge.rise{color:var(--accent-dark);}
   .gc-badge.fall{color:var(--success);}
+  .gc-badge.gc-warn{color:#b45309;background:#fef3e2;border-color:#fbd38d;font-weight:700;}
   #surveyList{display:flex;flex-direction:column;gap:8px;}
   .survey-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;}
   .survey-project{font-size:12px;font-weight:700;color:var(--text);}
@@ -629,6 +630,16 @@
           <div class="gp-field">
             <label>Side Slope (H:1V)</label>
             <input type="number" id="sideSlope" step="0.1" min="0" value="2">
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <div class="gp-field">
+            <label>Manning's n</label>
+            <input type="number" id="manningN" step="0.001" min="0.001" value="0.030" title="Roughness coefficient - 0.030 is a common default for an earth-lined channel">
+          </div>
+          <div class="gp-field">
+            <label>Min. Slope (%)</label>
+            <input type="number" id="minSlopePct" step="0.05" min="0" value="0.5" title="Grade segments flatter than this are flagged - flat drains don't self-clean">
           </div>
         </div>
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
@@ -2592,8 +2603,6 @@ async function fetchCrossSection(stationDist, bufferM){
   });
 }
 
-let lastXsPoints = null; // cached so a theme toggle can re-render without re-fetching real data
-
 async function loadCrossSection(stationDist){
   xsCurrentStationDist = stationDist;
   updateXsHighlight();
@@ -2605,7 +2614,6 @@ async function loadCrossSection(stationDist){
   try{
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
     const xsPoints = await fetchCrossSection(stationDist, bufferM);
-    lastXsPoints = xsPoints;
     const xsAreaResult = renderCrossSectionChart(xsPoints, stationDist);
     const valid = xsPoints.filter(p => p.elev != null);
     const left = valid[0], right = valid[valid.length-1];
@@ -2614,14 +2622,35 @@ async function loadCrossSection(stationDist){
       (grade != null ? ' · left→right cross-slope ' + grade.toFixed(1) + '%' : ' · no valid data across this section');
     if(designGrade){
       const centreGround = profilePointAtDist(stationDist);
+      let diff = null;
       if(centreGround && centreGround.elev != null){
-        const diff = centreGround.elev - designElevAt(stationDist);
+        diff = centreGround.elev - designElevAt(stationDist);
         text += ' · at centreline: ' + (diff>=0 ? 'cut ' : 'fill ') + fmtElev(Math.abs(diff));
       }
       if(xsAreaResult){
         const areaUnit = unitSystem === 'imperial' ? 'ft²' : 'm²';
         const areaVal = unitSystem === 'imperial' ? xsAreaResult.area * (M_TO_FT*M_TO_FT) : xsAreaResult.area;
         text += ' · ' + xsAreaResult.kind + ' area ' + areaVal.toFixed(2) + ' ' + areaUnit;
+      }
+      // Manning's capacity only makes physical sense for a cut (an actual conveyance channel) -
+      // a fill embankment isn't carrying water, so skip the hydraulic check there. Uses the
+      // DESIGNED template shape (bottomWidth/sideSlope), the textbook-correct input for a
+      // capacity check, not the real per-side daylight geometry the drawn shape uses.
+      if(diff != null && xsAreaResult && xsAreaResult.kind === 'cut'){
+        const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
+        const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+        const n = parseFloat(document.getElementById('manningN').value) || 0.03;
+        const slopeFrac = Math.abs(designSlopeAt(stationDist));
+        const cap = manningCapacity(Math.abs(diff), bottomWidth, sideSlope, n, slopeFrac);
+        if(cap){
+          const qVal = unitSystem === 'imperial' ? cap.Q * 35.3147 : cap.Q;
+          const vVal = unitSystem === 'imperial' ? cap.V * M_TO_FT : cap.V;
+          const qUnit = unitSystem === 'imperial' ? 'ft³/s' : 'm³/s';
+          const vUnit = unitSystem === 'imperial' ? 'ft/s' : 'm/s';
+          text += ' · capacity Q=' + qVal.toFixed(2) + ' ' + qUnit + ' @ V=' + vVal.toFixed(2) + ' ' + vUnit + ' (n=' + n.toFixed(3) + ')';
+        } else if(slopeFrac <= 1e-6){
+          text += ' · capacity n/a (flat/adverse grade here)';
+        }
       }
     }
     statusDiv.textContent = text;
@@ -2963,6 +2992,39 @@ document.querySelectorAll('.measure-toggle').forEach(btn => {
 
 // Design elevation at any distance, extrapolating past the first/last point using that segment's
 // own slope so cut/fill stays defined even if a point gets dragged inside the line's real extent.
+// The local longitudinal slope of the design grade at an arbitrary station - which segment's
+// slope applies, signed (negative = falling in the direction the line was drawn). Manning's
+// equation needs the magnitude; the sign is kept so callers can tell a falling grade from a flat
+// or adverse one, which can't convey flow by gravity no matter how the channel is shaped.
+function designSlopeAt(dist){
+  const pts = designGrade.points;
+  if(pts.length < 2) return 0;
+  let a, b;
+  if(dist <= pts[0].dist){ a = pts[0]; b = pts[1]; }
+  else if(dist >= pts[pts.length-1].dist){ a = pts[pts.length-2]; b = pts[pts.length-1]; }
+  else {
+    a = pts[0]; b = pts[1];
+    for(let i=1;i<pts.length;i++){ if(dist <= pts[i].dist){ a = pts[i-1]; b = pts[i]; break; } }
+  }
+  const run = b.dist - a.dist;
+  return run > 1e-6 ? (b.elev - a.elev) / run : 0;
+}
+
+// Manning's equation for a trapezoidal channel flowing full to `depth`: Q = (1/n)*A*R^(2/3)*sqrt(S).
+// Deliberately uses the DESIGNED template shape (trapezoidArea's regular bottomWidth/sideSlope
+// trapezoid), not the real per-side daylight search - hydraulic capacity is a property of the
+// constructed channel, not the natural ground it happens to be cut into, so the idealized regular
+// section is the textbook-correct input here, not an approximation to improve on later.
+function manningCapacity(depth, bottomWidth, sideSlope, n, slopeFrac){
+  if(depth <= 0 || n <= 0 || slopeFrac <= 0) return null;
+  const A = trapezoidArea(depth, bottomWidth, sideSlope);
+  const P = bottomWidth + 2 * depth * Math.sqrt(1 + sideSlope*sideSlope);
+  if(A <= 0 || P <= 0) return null;
+  const R = A / P;
+  const Q = (1/n) * A * Math.pow(R, 2/3) * Math.sqrt(slopeFrac);
+  return { A, P, R, Q, V: Q / A };
+}
+
 function designElevAt(dist){
   const pts = designGrade.points;
   if(pts.length < 2) return null;
@@ -3212,6 +3274,10 @@ document.getElementById('btnAddGradePoint').addEventListener('click', () => {
 });
 document.getElementById('bottomWidth').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 document.getElementById('sideSlope').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
+document.getElementById('manningN').addEventListener('change', () => {
+  if(xsOpen && xsCurrentStationDist != null) loadCrossSection(xsCurrentStationDist);
+});
+document.getElementById('minSlopePct').addEventListener('change', () => { if(designGrade) renderGradeEditor(); });
 
 function renderGradeEditor(){
   if(!designGrade) return;
@@ -3235,9 +3301,16 @@ function renderGradeEditor(){
       const gradePct = run > 1e-6 ? (next.elev - pt.elev) / run * 100 : 0;
       const sign = gradePct > 0.005 ? 'rise' : (gradePct < -0.005 ? 'fall' : '');
       const arrow = gradePct > 0.005 ? '↗' : (gradePct < -0.005 ? '↘' : '→');
+      // Flag a segment flatter than the minimum slope - a real design QA check, not just display:
+      // a drain graded too flat won't self-clean regardless of how the cross-section is shaped.
+      const minSlope = parseFloat(document.getElementById('minSlopePct').value) || 0;
+      const belowMin = minSlope > 0 && Math.abs(gradePct) < minSlope - 1e-6;
       html +=
         '<div class="grade-connector"><span class="gc-line"></span>' +
-          '<span class="gc-badge' + (sign ? ' '+sign : '') + '">' + arrow + ' ' + Math.abs(gradePct).toFixed(2) + '% over ' + fmtDist(run) + '</span>' +
+          '<span class="gc-badge' + (sign ? ' '+sign : '') + (belowMin ? ' gc-warn' : '') +
+            '" title="' + (belowMin ? 'Below the ' + minSlope + '% minimum slope' : '') + '">' +
+            (belowMin ? '⚠ ' : '') + arrow + ' ' + Math.abs(gradePct).toFixed(2) + '% over ' + fmtDist(run) +
+          '</span>' +
         '<span class="gc-line"></span></div>';
     }
   });
@@ -3793,9 +3866,24 @@ document.getElementById('btnExportCsv').addEventListener('click', () => {
   if(!profile) return;
   const distLabel = unitSystem === 'imperial' ? 'Distance_ft' : 'Distance_m';
   const elevLabel = unitSystem === 'imperial' ? 'Elevation_ft' : 'Elevation_m';
-  let csv = distLabel + ',Latitude,Longitude,' + elevLabel + '\n';
+  // When a design grade exists, this doubles as a CAD-friendly station table - design elevation
+  // and cut/fill columns alongside the real ground, one row per sample, ready to drop into
+  // Civil3D or similar rather than needing a second, separate export button for the same data.
+  let header = 'Station,' + distLabel + ',Latitude,Longitude,Ground_' + elevLabel;
+  if(designGrade) header += ',Design_' + elevLabel + ',CutFill_' + elevLabel + ',CutFill_Type';
+  let csv = header + '\n';
   profile.forEach(p => {
-    csv += distValue(p.dist).toFixed(2) + ',' + p.lat.toFixed(7) + ',' + p.lon.toFixed(7) + ',' + (p.elev==null ? '' : elevValue(p.elev).toFixed(3)) + '\n';
+    let row = fmtStation(p.dist) + ',' + distValue(p.dist).toFixed(2) + ',' + p.lat.toFixed(7) + ',' + p.lon.toFixed(7) + ',' + (p.elev==null ? '' : elevValue(p.elev).toFixed(3));
+    if(designGrade){
+      if(p.elev == null){
+        row += ',,,';
+      } else {
+        const design = designElevAt(p.dist);
+        const diff = p.elev - design;
+        row += ',' + elevValue(design).toFixed(3) + ',' + elevValue(Math.abs(diff)).toFixed(3) + ',' + (diff >= 0 ? 'CUT' : 'FILL');
+      }
+    }
+    csv += row + '\n';
   });
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
