@@ -1513,6 +1513,7 @@ let view3dRenderer = null, view3dScene = null, view3dCamera = null, view3dContro
 let view3dMesh = null, view3dAnimFrame = null, view3dOpen = false;
 let view3dMeasureGroup = null, stationsVisible3d = true;
 let view3dLineGroup = null, lineVisible3d = true;
+let view3dGradeGroup = null; // the design grade line + cut/fill stakes, shown whenever designGrade is active
 
 makeDraggable(document.querySelector('.view3d-panel'), document.getElementById('view3dDragHandle'));
 
@@ -1675,6 +1676,12 @@ function rebuildTerrainGeometry(ve){
     view3dLineGroup = buildLineOverlay3D(ve, meanElev);
     if(view3dLineGroup) view3dScene.add(view3dLineGroup);
   }
+
+  if(view3dGradeGroup){ disposeGroup3D(view3dGradeGroup); view3dScene.remove(view3dGradeGroup); view3dGradeGroup = null; }
+  if(designGrade){
+    view3dGradeGroup = buildDesignGradeLine3D(ve, meanElev);
+    if(view3dGradeGroup) view3dScene.add(view3dGradeGroup);
+  }
 }
 
 function disposeGroup3D(group){
@@ -1826,6 +1833,49 @@ function buildLineOverlay3D(ve, meanElev){
   return group.children.length ? group : null;
 }
 
+// The design grade drawn as a second draped line (same technique as the ground line above, but
+// following designElevAt() instead of the real elevation), plus vertical cut/fill "stakes" at
+// each station connecting ground to grade - red where you'd cut, blue where you'd fill.
+function buildDesignGradeLine3D(ve, meanElev){
+  if(!designGrade || !profile || !profile.length || !view3dGridInfo) return null;
+  const epsg = 'EPSG:' + view3dGridInfo.sr;
+  const group = new THREE.Group();
+  const gradeMat = new THREE.LineBasicMaterial({ color: 0xc2660a, linewidth: 2 });
+
+  let current = [];
+  const localXZ = (p) => { const [ux,uy] = proj4('WGS84', epsg, [p.lon, p.lat]); return utmToLocal3D(ux, uy); };
+  profile.forEach(p => {
+    if(p.elev == null){
+      if(current.length >= 6){ const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(current,3)); group.add(new THREE.Line(geom, gradeMat)); }
+      current = [];
+      return;
+    }
+    const { x, z } = localXZ(p);
+    const design = designElevAt(p.dist);
+    const y = (design - meanElev) * ve + Math.max(ve * 0.15, 0.3);
+    current.push(x, y, z);
+  });
+  if(current.length >= 6){ const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(current,3)); group.add(new THREE.Line(geom, gradeMat)); }
+
+  // Cut/fill stakes at the same station interval as the markers above.
+  const totalLen = profile[profile.length-1].dist;
+  const interval = niceGridSpacing(totalLen, 15);
+  const cutMat = new THREE.LineBasicMaterial({ color: 0xe0483e });
+  const fillMat = new THREE.LineBasicMaterial({ color: 0x0d9f6e });
+  for(let d = 0; d <= totalLen + 1e-6; d += interval){
+    const p = profilePointAtDist(Math.min(d, totalLen));
+    if(!p || p.elev == null) continue;
+    const { x, z } = localXZ(p);
+    const design = designElevAt(p.dist);
+    const groundY = (p.elev - meanElev) * ve;
+    const designY = (design - meanElev) * ve;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute([x, groundY, z, x, designY, z], 3));
+    group.add(new THREE.Line(geom, p.elev >= design ? cutMat : fillMat));
+  }
+  return group.children.length ? group : null;
+}
+
 async function applyTerrainMaterial(mode){
   if(!view3dMesh) return;
   if(mode === 'aerial'){
@@ -1944,19 +1994,27 @@ async function loadCrossSection(stationDist){
   try{
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
     const xsPoints = await fetchCrossSection(stationDist, bufferM);
-    renderCrossSectionChart(xsPoints);
+    renderCrossSectionChart(xsPoints, stationDist);
     const valid = xsPoints.filter(p => p.elev != null);
     const left = valid[0], right = valid[valid.length-1];
     const grade = (left && right) ? ((right.elev - left.elev) / (bufferM*2) * 100) : null;
-    statusDiv.textContent = fmtStation(stationDist) + ' · width ' + fmtDist(bufferM*2) +
+    let text = fmtStation(stationDist) + ' · width ' + fmtDist(bufferM*2) +
       (grade != null ? ' · left→right cross-slope ' + grade.toFixed(1) + '%' : ' · no valid data across this section');
+    if(designGrade){
+      const centreGround = profilePointAtDist(stationDist);
+      if(centreGround && centreGround.elev != null){
+        const diff = centreGround.elev - designElevAt(stationDist);
+        text += ' · at centreline: ' + (diff>=0 ? 'cut ' : 'fill ') + fmtElev(Math.abs(diff));
+      }
+    }
+    statusDiv.textContent = text;
   } catch(err){
     statusDiv.className = 'err';
     statusDiv.textContent = 'Could not build cross-section: ' + err.message;
   }
 }
 
-function renderCrossSectionChart(xsPoints){
+function renderCrossSectionChart(xsPoints, stationDist){
   const wrap = document.getElementById('xsChartWrap');
   const tooltip = document.getElementById('xsChartTooltip');
   const w = wrap.clientWidth || 640, h = 230;
@@ -1964,7 +2022,12 @@ function renderCrossSectionChart(xsPoints){
 
   const valid = xsPoints.filter(p => p.elev != null);
   if(!valid.length) return;
-  const realMin = Math.min(...valid.map(p=>p.elev)), realMax = Math.max(...valid.map(p=>p.elev));
+  let realMin = Math.min(...valid.map(p=>p.elev)), realMax = Math.max(...valid.map(p=>p.elev));
+  if(designGrade && stationDist != null){
+    const designElev = designElevAt(stationDist);
+    if(designElev < realMin) realMin = designElev;
+    if(designElev > realMax) realMax = designElev;
+  }
   const span = Math.max(realMax - realMin, 0.5);
   const yMin = realMin - span*0.12, yMax = realMax + span*0.12;
   const xMin = xsPoints[0].offset, xMax = xsPoints[xsPoints.length-1].offset;
@@ -2021,6 +2084,22 @@ function renderCrossSectionChart(xsPoints){
   centreLine.setAttribute('y1',pad.t); centreLine.setAttribute('y2',h-pad.b);
   centreLine.setAttribute('stroke',PALETTE.doneLine); centreLine.setAttribute('stroke-width','1.5'); centreLine.setAttribute('stroke-dasharray','4,3');
   svg.appendChild(centreLine);
+
+  // Design grade reference point at the centreline, if a design grade is active for this line.
+  if(designGrade && stationDist != null){
+    const designElev = designElevAt(stationDist);
+    const dy = Y(designElev);
+    const marker = document.createElementNS(NS,'circle');
+    marker.setAttribute('cx', centreX); marker.setAttribute('cy', dy); marker.setAttribute('r','5');
+    marker.setAttribute('fill', '#c2660a'); marker.setAttribute('stroke', '#fff'); marker.setAttribute('stroke-width','2');
+    svg.appendChild(marker);
+    const label = document.createElementNS(NS,'text');
+    label.setAttribute('x', centreX+9); label.setAttribute('y', dy-8);
+    label.setAttribute('font-size','10.5'); label.setAttribute('font-family','JetBrains Mono, monospace'); label.setAttribute('font-weight','700');
+    label.setAttribute('fill', '#c2660a');
+    label.textContent = 'design ' + fmtElev(designElev);
+    svg.appendChild(label);
+  }
 
   const axisX = document.createElementNS(NS,'line');
   axisX.setAttribute('x1',pad.l); axisX.setAttribute('x2',w-pad.r); axisX.setAttribute('y1',h-pad.b); axisX.setAttribute('y2',h-pad.b);
