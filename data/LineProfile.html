@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Contour — Line Elevation Profiles</title>
+<script>
+  // Applied as early as possible, before the stylesheet below even parses, so a saved dark-mode
+  // choice takes effect on the very first paint instead of flashing light-then-dark.
+  (function(){
+    try{
+      const saved = localStorage.getItem('contourTheme');
+      if(saved === 'dark' || saved === 'light') document.documentElement.setAttribute('data-theme', saved);
+    } catch(e){}
+  })();
+</script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -33,6 +43,61 @@
     --radius-sm:9px;
     --font-ui:'Inter',-apple-system,'Segoe UI',sans-serif;
     --font-mono:'JetBrains Mono',Consolas,monospace;
+    /* Chart-only tokens (read live by PALETTE in JS) - kept separate from the UI chrome tokens
+       above so the ground-line/grid/axis treatment can be tuned for chart legibility specifically. */
+    --chart-grid:#e7e9f2;
+    --chart-axis-line:#c7cbdb;
+    --chart-axis-text:#8489a0;
+    --chart-hover-cross:#b7bbd6;
+  }
+  /* Dark palette: applied when the OS is set to dark AND the user hasn't explicitly chosen light
+     (the toggle below sets data-theme explicitly, which always wins - see :root[data-theme="dark"]). */
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f111c;
+      --surface:#181b2c;
+      --surface-2:#1f2337;
+      --border:#2b2f47;
+      --border-strong:#3a3f5e;
+      --text:#eef0fb;
+      --text-dim:#a3a8c7;
+      --text-faint:#767ba3;
+      --accent:#7b7bf2;
+      --accent-dark:#a3a3ff;
+      --accent-soft:#26264a;
+      --accent-2:#38bdf8;
+      --success:#2dd4a0;
+      --success-soft:#0f2b23;
+      --danger:#ff8079;
+      --danger-soft:#3a1518;
+      --chart-grid:#2a2e46;
+      --chart-axis-line:#454a6b;
+      --chart-axis-text:#8288ab;
+      --chart-hover-cross:#5b5fa0;
+    }
+  }
+  /* Explicit toggle always wins, in either direction, over whatever the OS prefers. */
+  :root[data-theme="dark"]{
+    --bg:#0f111c;
+    --surface:#181b2c;
+    --surface-2:#1f2337;
+    --border:#2b2f47;
+    --border-strong:#3a3f5e;
+    --text:#eef0fb;
+    --text-dim:#a3a8c7;
+    --text-faint:#767ba3;
+    --accent:#7b7bf2;
+    --accent-dark:#a3a3ff;
+    --accent-soft:#26264a;
+    --accent-2:#38bdf8;
+    --success:#2dd4a0;
+    --success-soft:#0f2b23;
+    --danger:#ff8079;
+    --danger-soft:#3a1518;
+    --chart-grid:#2a2e46;
+    --chart-axis-line:#454a6b;
+    --chart-axis-text:#8288ab;
+    --chart-hover-cross:#5b5fa0;
   }
   *{box-sizing:border-box;}
   html,body{height:100%;margin:0;}
@@ -323,6 +388,20 @@
     padding:4px 0 6px;
   }
   .leaflet-control-attribution{font-size:10px;}
+  /* Leaflet ships its own light-themed control chrome (zoom buttons, attribution bar) that won't
+     pick up the app's CSS variables on its own - restyled explicitly for dark mode so the map's
+     on-screen controls don't stay a jarring white square. The map tiles/imagery themselves are
+     real government data and are left exactly as they are in both themes. */
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]) .leaflet-control-zoom a{ background:var(--surface); color:var(--text); border-color:var(--border-strong)!important; }
+    :root:not([data-theme="light"]) .leaflet-control-zoom a:hover{ background:var(--surface-2); }
+    :root:not([data-theme="light"]) .leaflet-control-attribution{ background:rgba(15,17,28,.82); color:var(--text-dim); }
+    :root:not([data-theme="light"]) .leaflet-control-attribution a{ color:var(--accent); }
+  }
+  :root[data-theme="dark"] .leaflet-control-zoom a{ background:var(--surface); color:var(--text); border-color:var(--border-strong)!important; }
+  :root[data-theme="dark"] .leaflet-control-zoom a:hover{ background:var(--surface-2); }
+  :root[data-theme="dark"] .leaflet-control-attribution{ background:rgba(15,17,28,.82); color:var(--text-dim); }
+  :root[data-theme="dark"] .leaflet-control-attribution a{ color:var(--accent); }
   ::-webkit-scrollbar{width:9px;}
   ::-webkit-scrollbar-thumb{background:#d3d6e2;border-radius:5px;}
   ::-webkit-scrollbar-track{background:transparent;}
@@ -384,6 +463,10 @@
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 2v20M2 12h20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     Powered by Ontario LiDAR
   </div>
+  <button id="btnThemeToggle" class="icon-btn" title="Switch between light and dark">
+    <svg id="iconThemeLight" width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <svg id="iconThemeDark" width="16" height="16" viewBox="0 0 24 24" fill="none" style="display:none;"><path d="M20 14.5A8.5 8.5 0 019.5 4 8.5 8.5 0 1020 14.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+  </button>
 </header>
 
 <div id="main">
@@ -725,18 +808,53 @@ const DTM_URL = 'https://ws.geoservices.lrc.gov.on.ca/arcgis5/rest/services/Elev
 const AERIAL_URL = 'https://ws.lioservices.lrc.gov.on.ca/arcgis2/rest/services/LIO_Imagery/Ontario_Imagery_Web_Map_Service/MapServer';
 const M_TO_FT = 3.28084;
 
+// Live getters, not fixed strings - reads whatever the current theme's CSS custom properties
+// resolve to at the moment each chart is drawn, so every SVG chart (elevation profile,
+// cross-section) automatically follows a light/dark toggle without needing two hardcoded copies
+// of every color. `text` is the one deliberate exception: it's the tooltip/measure-label
+// background chip, which stays a fixed dark scrim in both themes for consistent contrast against
+// whatever's behind it, the same way most apps keep tooltips dark regardless of overall theme.
+const rootCss = () => getComputedStyle(document.documentElement);
 const PALETTE = {
-  accent: '#5b5bf0',
-  accentDark: '#4747d6',
-  success: '#0d9f6e',
-  drawLine: '#5b5bf0',
-  doneLine: '#0d9f6e',
-  gridLine: '#e7e9f2',
-  axisLine: '#c7cbdb',
-  axisText: '#8489a0',
-  hoverCross: '#b7bbd6',
+  get accent(){ return rootCss().getPropertyValue('--accent').trim(); },
+  get accentDark(){ return rootCss().getPropertyValue('--accent-dark').trim(); },
+  get success(){ return rootCss().getPropertyValue('--success').trim(); },
+  get drawLine(){ return rootCss().getPropertyValue('--accent').trim(); },
+  get doneLine(){ return rootCss().getPropertyValue('--success').trim(); },
+  get gridLine(){ return rootCss().getPropertyValue('--chart-grid').trim(); },
+  get axisLine(){ return rootCss().getPropertyValue('--chart-axis-line').trim(); },
+  get axisText(){ return rootCss().getPropertyValue('--chart-axis-text').trim(); },
+  get hoverCross(){ return rootCss().getPropertyValue('--chart-hover-cross').trim(); },
   text: '#161824'
 };
+
+// Theme toggle: explicit choice persists (localStorage), otherwise the OS preference applies (see
+// the CSS media query). Existing chart SVGs have their colors baked into element attributes at
+// render time, not live var() references, so anything already on screen needs an explicit
+// re-render to pick up the new palette - a plain CSS toggle wouldn't be enough on its own.
+function currentTheme(){
+  const explicit = document.documentElement.getAttribute('data-theme');
+  if(explicit) return explicit;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function applyThemeIcon(theme){
+  document.getElementById('iconThemeLight').style.display = theme === 'dark' ? 'none' : '';
+  document.getElementById('iconThemeDark').style.display = theme === 'dark' ? '' : 'none';
+}
+function setTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  try{ localStorage.setItem('contourTheme', theme); } catch(e){}
+  applyThemeIcon(theme);
+  if(profile) refreshChart();
+  if(xsOpen && lastXsPoints) renderCrossSectionChart(lastXsPoints, xsCurrentStationDist); // re-render from cache, no re-fetch
+}
+document.getElementById('btnThemeToggle').addEventListener('click', () => {
+  setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+});
+applyThemeIcon(currentTheme());
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if(!document.documentElement.getAttribute('data-theme')) applyThemeIcon(currentTheme());
+});
 
 // ---------- unit / scale state ----------
 
@@ -2329,6 +2447,8 @@ async function fetchCrossSection(stationDist, bufferM){
   });
 }
 
+let lastXsPoints = null; // cached so a theme toggle can re-render without re-fetching real data
+
 async function loadCrossSection(stationDist){
   xsCurrentStationDist = stationDist;
   updateXsHighlight();
@@ -2340,6 +2460,7 @@ async function loadCrossSection(stationDist){
   try{
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
     const xsPoints = await fetchCrossSection(stationDist, bufferM);
+    lastXsPoints = xsPoints;
     const xsAreaResult = renderCrossSectionChart(xsPoints, stationDist);
     const valid = xsPoints.filter(p => p.elev != null);
     const left = valid[0], right = valid[valid.length-1];
