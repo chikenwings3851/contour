@@ -291,6 +291,18 @@
   }
   .modal-head h3{margin:0;font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px;}
   .modal-head-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .view3d-panel{width:min(1200px,94vw);max-height:90vh;}
+  #view3dWrap{
+    position:relative;width:100%;height:min(70vh,780px);
+    background:#0e1420;border-radius:10px;overflow:hidden;
+  }
+  #view3dCanvas{display:block;width:100%;height:100%;}
+  #view3dStatus{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:#c7ccdb;font-size:13px;font-weight:600;text-align:center;padding:20px;
+    background:#0e1420;z-index:2;
+  }
+  #view3dStatus.hidden{display:none;}
   .drag-dots{color:var(--text-faint);}
 </style>
 </head>
@@ -445,6 +457,10 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 15l5-5 4 4 5-6 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Export LiDAR Corridor (GeoTIFF)
         </button>
+        <button id="btnView3D">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          View Corridor in 3D
+        </button>
       </div>
     </div>
 
@@ -525,9 +541,42 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="view3dModal">
+  <div class="modal-panel view3d-panel">
+    <div class="modal-head" id="view3dDragHandle">
+      <h3>
+        <svg class="drag-dots" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.6"/><circle cx="16" cy="6" r="1.6"/><circle cx="8" cy="12" r="1.6"/><circle cx="16" cy="12" r="1.6"/><circle cx="8" cy="18" r="1.6"/><circle cx="16" cy="18" r="1.6"/></svg>
+        Corridor — 3D Terrain
+      </h3>
+      <div class="modal-head-right">
+        <select id="ve3d" title="Vertical exaggeration">
+          <option value="1">1× (true scale)</option>
+          <option value="2" selected>2× exaggeration</option>
+          <option value="5">5× exaggeration</option>
+          <option value="10">10× exaggeration</option>
+        </select>
+        <div class="seg-toggle" id="texToggle3d">
+          <button data-tex="aerial" class="ghost-active">Aerial</button>
+          <button data-tex="shaded">Shaded</button>
+        </div>
+        <button id="btnCloseView3d" class="icon-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="view3dWrap">
+      <div id="view3dStatus"></div>
+      <canvas id="view3dCanvas"></canvas>
+    </div>
+    <div class="datum-note">Drag to orbit · scroll to zoom · right-drag to pan. No downsampling — full native 0.5m LiDAR resolution.</div>
+  </div>
+</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lerc@2.0.0/LercDecode.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
 'use strict';
 
@@ -537,6 +586,7 @@ proj4.defs('EPSG:26917', '+proj=utm +zone=17 +datum=NAD83 +units=m +no_defs +typ
 proj4.defs('EPSG:26918', '+proj=utm +zone=18 +datum=NAD83 +units=m +no_defs +type=crs');
 
 const DTM_URL = 'https://ws.geoservices.lrc.gov.on.ca/arcgis5/rest/services/Elevation/Ontario_DTM_LidarDerived/ImageServer';
+const AERIAL_URL = 'https://ws.lioservices.lrc.gov.on.ca/arcgis2/rest/services/LIO_Imagery/Ontario_Imagery_Web_Map_Service/MapServer';
 const M_TO_FT = 3.28084;
 
 const PALETTE = {
@@ -653,7 +703,7 @@ const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.
 }).addTo(map);
 
 // Same Ontario orthophoto source (SWOOP/COOP via LIO) used in MaxDrainageMap.
-const aerialLayer = L.tileLayer('https://ws.lioservices.lrc.gov.on.ca/arcgis2/rest/services/LIO_Imagery/Ontario_Imagery_Web_Map_Service/MapServer/tile/{z}/{y}/{x}', {
+const aerialLayer = L.tileLayer(AERIAL_URL + '/tile/{z}/{y}/{x}', {
   maxZoom: 19,
   attribution: 'Ontario Imagery (LIO)'
 });
@@ -838,6 +888,7 @@ function resetAll(){
   profile = null;
   chartInstances = [];
   closeModal();
+  closeView3D();
   btnDraw.classList.remove('active');
   btnUndo.disabled = true;
   btnFinish.disabled = true;
@@ -1182,17 +1233,16 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
 
 function utmZoneFor(lon){ return Math.floor((lon + 180) / 6) + 1; }
 
-document.getElementById('btnExportCorridor').addEventListener('click', () => exportLidarCorridor());
-
-async function exportLidarCorridor(){
-  if(!vertices.length) return;
-  const bufferM = parseFloat(document.getElementById('corridorWidth').value);
+// Shared by the GeoTIFF export and the 3D terrain view — fetches the corridor's elevation as one
+// full-native-0.5m-resolution grid (no downsampling either way), tiled into sheets/chunks exactly
+// like MaxDrainageMap's DTM export so a big corridor still comes back as one clean merged grid.
+// Returns {elev,W,H,xmin,ymax,sr,zone} on success, or throws with a message meant to show as-is.
+async function buildCorridorGrid(bufferM, actionLabel){
+  if(!vertices.length) throw new Error('no line to build a corridor from');
   const centerLon = vertices.reduce((s,v) => s + v.lng, 0) / vertices.length;
   const zone = utmZoneFor(centerLon);
   if(zone < 15 || zone > 18){
-    statusEl.className = 'err';
-    statusEl.textContent = 'Corridor export failed: this line is in UTM zone ' + zone + 'N, outside the zones set up for this (15N-18N covers all of Ontario).';
-    return;
+    throw new Error('this line is in UTM zone ' + zone + 'N, outside the zones set up for this (15N-18N covers all of Ontario).');
   }
   const sr = 26900 + zone;
   const epsg = 'EPSG:' + sr;
@@ -1211,42 +1261,43 @@ async function exportLidarCorridor(){
   const SHEET = 3000, MAX_SHEETS = 16;
   const nSX = Math.ceil(wM/SHEET), nSY = Math.ceil(hM/SHEET), total = nSX*nSY;
   if(total > MAX_SHEETS){
-    statusEl.className = 'err';
-    statusEl.textContent = 'Corridor export failed: this would need ' + total + ' sheets (max ' + MAX_SHEETS + ', about 12×12km) — try a narrower corridor width or a shorter line.';
-    return;
+    throw new Error('this would need ' + total + ' sheets (max ' + MAX_SHEETS + ', about 12×12km) — try a narrower corridor width or a shorter line. (No downsampling is done to squeeze under this — it\'s a hard cap, not a quality tradeoff.)');
   }
   if(typeof Lerc === 'undefined'){
-    statusEl.className = 'err';
-    statusEl.textContent = 'Corridor export failed: the LERC decoder did not load (check your connection and reload).';
-    return;
+    throw new Error('the LERC decoder did not load (check your connection and reload).');
   }
 
   const W = Math.round(wM/PS), H = Math.round(hM/PS);
   const elev = new Float32Array(W*H); elev.fill(-9999);
   let anyValid = false;
 
-  statusEl.className = '';
   showProgressBar();
+  let sheetNo = 0;
+  for(let sy=0; sy<nSY; sy++){
+    for(let sx=0; sx<nSX; sx++){
+      sheetNo++;
+      const sx0 = xmin+sx*SHEET, sx1 = Math.min(xmax, sx0+SHEET);
+      const sy1 = ymax-sy*SHEET, sy0 = Math.max(ymin, sy1-SHEET);
+      statusEl.innerHTML = actionLabel + ' — sheet ' + sheetNo + ' of ' + total + '…';
+      const ok = await fetchCorridorSheetIntoGrid(elev, W, H, xmin, ymax, PS, sx0, sy0, sx1, sy1, sr);
+      if(ok) anyValid = true;
+      setProgressBar(sheetNo, total);
+    }
+  }
+  hideProgressBar();
+  if(!anyValid) throw new Error('no LiDAR coverage found in this corridor.');
+
+  return { elev, W, H, xmin, ymax, sr, zone };
+}
+
+document.getElementById('btnExportCorridor').addEventListener('click', () => exportLidarCorridor());
+
+async function exportLidarCorridor(){
+  const bufferM = parseFloat(document.getElementById('corridorWidth').value);
+  statusEl.className = '';
   try{
-    let sheetNo = 0;
-    for(let sy=0; sy<nSY; sy++){
-      for(let sx=0; sx<nSX; sx++){
-        sheetNo++;
-        const sx0 = xmin+sx*SHEET, sx1 = Math.min(xmax, sx0+SHEET);
-        const sy1 = ymax-sy*SHEET, sy0 = Math.max(ymin, sy1-SHEET);
-        statusEl.innerHTML = 'Exporting LiDAR corridor — sheet ' + sheetNo + ' of ' + total + '…';
-        const ok = await fetchCorridorSheetIntoGrid(elev, W, H, xmin, ymax, PS, sx0, sy0, sx1, sy1, sr);
-        if(ok) anyValid = true;
-        setProgressBar(sheetNo, total);
-      }
-    }
-    hideProgressBar();
-    if(!anyValid){
-      statusEl.className = 'err';
-      statusEl.textContent = 'Corridor export failed: no LiDAR coverage found in this corridor.';
-      return;
-    }
-    const buf = buildFloat32GeoTIFF(elev, W, H, PS, PS, xmin, ymax, sr);
+    const { elev, W, H, xmin, ymax, sr, zone } = await buildCorridorGrid(bufferM, 'Exporting LiDAR corridor');
+    const buf = buildFloat32GeoTIFF(elev, W, H, 0.5, 0.5, xmin, ymax, sr);
     const blob = new Blob([buf], { type: 'image/tiff' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1369,6 +1420,183 @@ function buildFloat32GeoTIFF(elev,W,H,psx,psy,ulX,ulY,epsg){
   const out=new DataView(buf,imgOff);
   for(let i=0;i<elev.length;i++) out.setFloat32(i*4,elev[i],true);
   return buf;
+}
+
+// ---------- 3D terrain view ----------
+// Reuses buildCorridorGrid() - the exact same full-native-0.5m fetch as the GeoTIFF export -
+// so the 3D mesh has real, un-downsampled data at every vertex. Only the presentation differs:
+// a Three.js heightmap mesh with orbit controls, optionally textured with the real aerial photo.
+
+let view3dGridInfo = null;
+let view3dRenderer = null, view3dScene = null, view3dCamera = null, view3dControls = null;
+let view3dMesh = null, view3dAnimFrame = null, view3dOpen = false;
+
+makeDraggable(document.querySelector('.view3d-panel'), document.getElementById('view3dDragHandle'));
+
+document.getElementById('btnView3D').addEventListener('click', () => openView3D());
+document.getElementById('btnCloseView3d').addEventListener('click', () => closeView3D());
+document.getElementById('ve3d').addEventListener('change', (e) => {
+  if(view3dGridInfo) rebuildTerrainGeometry(parseFloat(e.target.value));
+});
+document.querySelectorAll('#texToggle3d button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#texToggle3d button').forEach(b => b.classList.toggle('ghost-active', b===btn));
+    if(view3dMesh) applyTerrainMaterial(btn.dataset.tex);
+  });
+});
+
+function closeView3D(){
+  view3dOpen = false;
+  document.getElementById('view3dModal').style.display = 'none';
+  if(view3dAnimFrame) cancelAnimationFrame(view3dAnimFrame);
+}
+
+async function openView3D(){
+  if(!vertices.length) return;
+  view3dOpen = true;
+  document.getElementById('view3dModal').style.display = 'block';
+  const statusDiv = document.getElementById('view3dStatus');
+  statusDiv.classList.remove('hidden');
+  statusDiv.textContent = 'Building 3D terrain — fetching full-resolution LiDAR…';
+  resizeView3D();
+  try{
+    const bufferM = parseFloat(document.getElementById('corridorWidth').value);
+    view3dGridInfo = await buildCorridorGrid(bufferM, 'Building 3D terrain');
+    initThreeScene();
+    rebuildTerrainGeometry(parseFloat(document.getElementById('ve3d').value));
+    const activeTex = document.querySelector('#texToggle3d button.ghost-active').dataset.tex;
+    await applyTerrainMaterial(activeTex);
+    statusDiv.classList.add('hidden');
+    statusEl.className = '';
+    statusEl.innerHTML = '3D terrain built — ' + view3dGridInfo.W + '×' + view3dGridInfo.H + ' points, full native 0.5m resolution (no downsampling).';
+  } catch(err){
+    statusDiv.classList.remove('hidden');
+    statusDiv.textContent = 'Could not build 3D terrain: ' + err.message;
+    hideProgressBar();
+  }
+}
+
+function initThreeScene(){
+  const canvas = document.getElementById('view3dCanvas');
+  if(!view3dRenderer){
+    view3dRenderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    view3dScene = new THREE.Scene();
+    view3dScene.background = new THREE.Color(0x0e1420);
+    view3dCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 200000);
+    view3dControls = new THREE.OrbitControls(view3dCamera, canvas);
+    view3dControls.enableDamping = true;
+    view3dControls.dampingFactor = 0.08;
+
+    view3dScene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+    sun.position.set(1, 1.5, 1);
+    view3dScene.add(sun);
+
+    window.addEventListener('resize', resizeView3D);
+  }
+  resizeView3D();
+  if(view3dAnimFrame) cancelAnimationFrame(view3dAnimFrame);
+  animateView3D();
+}
+
+function animateView3D(){
+  view3dAnimFrame = requestAnimationFrame(animateView3D);
+  view3dControls.update();
+  view3dRenderer.render(view3dScene, view3dCamera);
+}
+
+function resizeView3D(){
+  if(!view3dRenderer) return;
+  const wrap = document.getElementById('view3dWrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  if(w <= 0 || h <= 0) return;
+  view3dRenderer.setSize(w, h, false);
+  view3dCamera.aspect = w / h;
+  view3dCamera.updateProjectionMatrix();
+}
+
+// Builds the terrain mesh directly from the elevation grid — every vertex is a real fetched
+// point, one per 0.5m cell, no simplification/decimation. `ve` (vertical exaggeration) only
+// scales displayed height around the mean, same honest-scaling idea as the 2D chart's VE control.
+function rebuildTerrainGeometry(ve){
+  const { elev, W, H } = view3dGridInfo;
+  let minElev = Infinity, sum = 0, validN = 0;
+  for(let i=0;i<elev.length;i++){
+    if(elev[i] !== -9999){ if(elev[i] < minElev) minElev = elev[i]; sum += elev[i]; validN++; }
+  }
+  const meanElev = sum / validN;
+
+  const positions = new Float32Array(W*H*3);
+  const uvs = new Float32Array(W*H*2);
+  for(let r=0;r<H;r++){
+    for(let c=0;c<W;c++){
+      const i = r*W + c;
+      let e = elev[i];
+      if(e === -9999) e = minElev; // fill gaps with the corridor's own lowest real point, not a fabricated value
+      positions[i*3] = (c - W/2) * 0.5;
+      positions[i*3+1] = (e - meanElev) * ve;
+      positions[i*3+2] = (r - H/2) * 0.5;
+      uvs[i*2] = c / (W-1);
+      uvs[i*2+1] = 1 - r / (H-1);
+    }
+  }
+  const indices = [];
+  for(let r=0;r<H-1;r++){
+    for(let c=0;c<W-1;c++){
+      const a = r*W+c, b = a+1, cc = a+W, d = cc+1;
+      indices.push(a, cc, b, b, cc, d);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  const existingMaterial = view3dMesh ? view3dMesh.material : new THREE.MeshStandardMaterial({ color: 0x8a9bb0, side: THREE.DoubleSide });
+  if(view3dMesh){ view3dScene.remove(view3dMesh); view3dMesh.geometry.dispose(); }
+  view3dMesh = new THREE.Mesh(geometry, existingMaterial);
+  view3dScene.add(view3dMesh);
+
+  // A corridor is typically long and thin, so framing off just one dimension left it looking
+  // tiny in a lot of empty space - fit the camera to the mesh's real bounding sphere instead,
+  // which works regardless of how elongated the shape is.
+  geometry.computeBoundingSphere();
+  const sphere = geometry.boundingSphere;
+  const dist = sphere.radius * 1.6;
+  view3dCamera.position.set(sphere.center.x + dist*0.55, sphere.center.y + dist*0.5, sphere.center.z + dist*0.75);
+  view3dCamera.near = Math.max(0.1, sphere.radius * 0.002);
+  view3dCamera.far = sphere.radius * 30;
+  view3dCamera.updateProjectionMatrix();
+  view3dControls.target.set(sphere.center.x, sphere.center.y, sphere.center.z);
+  view3dControls.update();
+}
+
+async function applyTerrainMaterial(mode){
+  if(!view3dMesh) return;
+  if(mode === 'aerial'){
+    try{
+      const { xmin, ymax, W, H, sr } = view3dGridInfo;
+      const ymin = ymax - H*0.5, xmax = xmin + W*0.5;
+      const texW = Math.min(2048, W), texH = Math.min(2048, H);
+      const url = AERIAL_URL + '/export?bbox=' + xmin + ',' + ymin + ',' + xmax + ',' + ymax +
+                  '&bboxSR=' + sr + '&imageSR=' + sr + '&size=' + texW + ',' + texH + '&format=jpg&f=image';
+      const tex = await new Promise((resolve, reject) => {
+        new THREE.TextureLoader().load(url, resolve, undefined, reject);
+      });
+      view3dMesh.material.map = tex;
+      view3dMesh.material.color.set(0xffffff);
+      view3dMesh.material.needsUpdate = true;
+    } catch(err){
+      view3dMesh.material.map = null;
+      view3dMesh.material.color.set(0x8a9bb0);
+      view3dMesh.material.needsUpdate = true;
+    }
+  } else {
+    view3dMesh.material.map = null;
+    view3dMesh.material.color.set(0x8a9bb0);
+    view3dMesh.material.needsUpdate = true;
+  }
 }
 
 // ---------- stats ----------
@@ -1644,6 +1872,7 @@ document.getElementById('btnCloseModal').addEventListener('click', closeModal);
 document.addEventListener('keydown', (e) => {
   if(e.key !== 'Escape') return;
   if(modalOpen){ closeModal(); return; }
+  if(view3dOpen){ closeView3D(); return; }
   if(drawing){
     resetAll();
     statusEl.innerHTML = 'Draw cancelled. ' + IDLE_STATUS;
