@@ -619,6 +619,7 @@
         </div>
         <button id="btnToggleStations3d" class="ghost-active">📍 Stations</button>
         <button id="btnToggleLine3d" class="ghost-active">📏 Line</button>
+        <button id="btnToggleChannel3d" class="ghost-active">🛠 Channel</button>
         <button id="btnCrossSection3d">✂ Cross Section</button>
         <button id="btnCloseView3d" class="icon-btn">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -629,7 +630,7 @@
       <div id="view3dStatus"></div>
       <canvas id="view3dCanvas"></canvas>
     </div>
-    <div class="datum-note">Drag to orbit · scroll to zoom · right-drag to pan. No downsampling — full native 0.5m LiDAR resolution.</div>
+    <div class="datum-note">Drag to orbit · scroll to zoom · right-drag to pan · W/A/S/D or arrow keys to fly forward/back/strafe. No downsampling — full native 0.5m LiDAR resolution.</div>
   </div>
 </div>
 
@@ -972,6 +973,7 @@ function resetAll(){
   hideProgressBar();
   profile = null;
   chartInstances = [];
+  chartXView = null;
   closeModal();
   closeView3D();
   closeCrossSectionModal();
@@ -1092,6 +1094,7 @@ async function runProfile(){
     if(myRequestId !== profileRequestId) return;
     if(!allPoints.length) throw new Error('No elevation data returned for this line — it may be outside Ontario or outside LiDAR coverage, or the elevation service may be temporarily unavailable.');
 
+    chartXView = null;
     let cum = 0, prev = null;
     profile = allPoints.map(s => {
       if(prev) cum += haversine(prev.lat, prev.lon, s.lat, s.lon);
@@ -1524,6 +1527,9 @@ let view3dMesh = null, view3dAnimFrame = null, view3dOpen = false;
 let view3dMeasureGroup = null, stationsVisible3d = true;
 let view3dLineGroup = null, lineVisible3d = true;
 let view3dGradeGroup = null; // the design grade line + cut/fill stakes, shown whenever designGrade is active
+let view3dChannelGroup = null, channelVisible3d = true; // the lofted trapezoidal channel/embankment solid
+let view3dMoveState = {}; // live keys-held state for WASD/arrow-key fly movement, read every render frame
+let view3dSceneRadius = 0, view3dMeanElev = 0; // cached from the last full terrain rebuild, reused for fly speed and for cheap design-overlay-only refreshes
 
 makeDraggable(document.querySelector('.view3d-panel'), document.getElementById('view3dDragHandle'));
 
@@ -1548,6 +1554,49 @@ document.getElementById('btnToggleLine3d').addEventListener('click', (e) => {
   e.currentTarget.classList.toggle('ghost-active', lineVisible3d);
   if(view3dGridInfo) rebuildTerrainGeometry(parseFloat(document.getElementById('ve3d').value));
 });
+document.getElementById('btnToggleChannel3d').addEventListener('click', (e) => {
+  channelVisible3d = !channelVisible3d;
+  e.currentTarget.classList.toggle('ghost-active', channelVisible3d);
+  if(view3dGridInfo) rebuildTerrainGeometry(parseFloat(document.getElementById('ve3d').value));
+});
+
+// Fly-through movement: WASD/arrow keys move the camera and its orbit target together along the
+// camera's own look direction (and its horizontal right vector for strafing), on top of
+// OrbitControls' existing drag-to-orbit/scroll-to-zoom/right-drag-to-pan — addresses corridors
+// being too long to usefully navigate with orbit-around-a-fixed-point alone. Gated on view3dOpen
+// so the keys don't hijack typing elsewhere in the app, and ignored while a text input/select has
+// focus as a second guard.
+window.addEventListener('keydown', (e) => {
+  if(!view3dOpen) return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  const key = e.key.toLowerCase();
+  if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(key)){
+    view3dMoveState[key] = true;
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', (e) => { view3dMoveState[e.key.toLowerCase()] = false; });
+window.addEventListener('blur', () => { view3dMoveState = {}; });
+
+function applyFlyMovement3D(){
+  const m = view3dMoveState;
+  const active = m.w || m.a || m.s || m.d || m.arrowup || m.arrowdown || m.arrowleft || m.arrowright;
+  if(!active || !view3dSceneRadius) return;
+  const speed = view3dSceneRadius * 0.02;
+  const dir = new THREE.Vector3();
+  view3dCamera.getWorldDirection(dir);
+  if(dir.lengthSq() < 1e-8) dir.set(0, 0, -1);
+  dir.normalize();
+  const right = new THREE.Vector3().crossVectors(dir, view3dCamera.up).normalize();
+  const move = new THREE.Vector3();
+  if(m.w || m.arrowup) move.addScaledVector(dir, speed);
+  if(m.s || m.arrowdown) move.addScaledVector(dir, -speed);
+  if(m.d || m.arrowright) move.addScaledVector(right, speed);
+  if(m.a || m.arrowleft) move.addScaledVector(right, -speed);
+  view3dCamera.position.add(move);
+  view3dControls.target.add(move);
+}
 
 function closeView3D(){
   view3dOpen = false;
@@ -1605,6 +1654,7 @@ function initThreeScene(){
 
 function animateView3D(){
   view3dAnimFrame = requestAnimationFrame(animateView3D);
+  applyFlyMovement3D();
   view3dControls.update();
   view3dRenderer.render(view3dScene, view3dCamera);
 }
@@ -1674,6 +1724,8 @@ function rebuildTerrainGeometry(ve){
   view3dCamera.updateProjectionMatrix();
   view3dControls.target.set(sphere.center.x, sphere.center.y, sphere.center.z);
   view3dControls.update();
+  view3dSceneRadius = sphere.radius; // used to scale WASD/arrow fly-through speed to this corridor's real size
+  view3dMeanElev = meanElev;
 
   if(view3dMeasureGroup){ disposeGroup3D(view3dMeasureGroup); view3dScene.remove(view3dMeasureGroup); view3dMeasureGroup = null; }
   if(stationsVisible3d){
@@ -1687,11 +1739,35 @@ function rebuildTerrainGeometry(ve){
     if(view3dLineGroup) view3dScene.add(view3dLineGroup);
   }
 
+  updateDesignOverlay3D(ve, meanElev);
+}
+
+// Rebuilds only the design-grade line/stakes + the proposed channel solid, without touching the
+// terrain mesh, stations, or drawn-line overlay - kept separate from rebuildTerrainGeometry() so
+// that live edits to the design grade / bottom width / side slope (which can fire on every mouse-
+// move tick while dragging a grade point on the 2D chart) don't re-rebuild the full multi-hundred-
+// thousand-vertex terrain mesh on every tick, which would make dragging laggy whenever the 3D
+// panel happens to be open at the same time.
+function updateDesignOverlay3D(ve, meanElev){
   if(view3dGradeGroup){ disposeGroup3D(view3dGradeGroup); view3dScene.remove(view3dGradeGroup); view3dGradeGroup = null; }
   if(designGrade){
     view3dGradeGroup = buildDesignGradeLine3D(ve, meanElev);
     if(view3dGradeGroup) view3dScene.add(view3dGradeGroup);
   }
+
+  if(view3dChannelGroup){ disposeGroup3D(view3dChannelGroup); view3dScene.remove(view3dChannelGroup); view3dChannelGroup = null; }
+  if(designGrade && channelVisible3d){
+    view3dChannelGroup = buildDesignChannel3D(ve, meanElev);
+    if(view3dChannelGroup) view3dScene.add(view3dChannelGroup);
+  }
+}
+
+// Called from renderCutFillStats() (i.e. on every design-grade edit: dragging/adding/removing a
+// point, or changing bottom width/side slope) so the 3D channel solid stays in sync with the 2D
+// design whenever the 3D panel is already open - a no-op otherwise.
+function refreshDesignOverlay3DIfOpen(){
+  if(!view3dOpen || !view3dGridInfo || !view3dMesh) return;
+  updateDesignOverlay3D(parseFloat(document.getElementById('ve3d').value), view3dMeanElev);
 }
 
 function disposeGroup3D(group){
@@ -1884,6 +1960,79 @@ function buildDesignGradeLine3D(ve, meanElev){
     group.add(new THREE.Line(geom, p.elev >= design ? cutMat : fillMat));
   }
   return group.children.length ? group : null;
+}
+
+// The proposed channel/embankment itself, lofted along the alignment from the same bottom-width
+// and side-slope inputs that drive the 2D cut/fill volume math (computeCutFillStats' trapezoidArea)
+// - not just a centerline, so the corridor's actual proposed shape is visible in 3D. At every
+// profile sample: the design-elevation edge always gets the bottom width, and the ground-elevation
+// edge gets bottom + 2*sideSlope*depth - the same trapezoid used for volume, just drawn instead of
+// integrated. That reads correctly as a trench for a cut (narrow floor at design, wide daylight
+// line at ground) and as an embankment for a fill (wide base at ground, narrow crest at design)
+// with no separate cut/fill branch needed. Colored red/green per station to match the exact same
+// cut/fill convention as the 2D chart's shaded bands and the existing cut/fill stakes above.
+function buildDesignChannel3D(ve, meanElev){
+  if(!designGrade || !profile || !profile.length || !view3dGridInfo) return null;
+  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
+  const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+  const epsg = 'EPSG:' + view3dGridInfo.sr;
+  const LIFT = Math.max(ve * 0.15, 0.3);
+  const cutColor = new THREE.Color(0xe0483e), fillColor = new THREE.Color(0x0d9f6e);
+
+  const positions = [], colors = [];
+  let seg = [];
+
+  function flushSeg(){
+    for(let i=0;i<seg.length-1;i++){
+      const a = seg[i], b = seg[i+1];
+      let tx = b.x - a.x, tz = b.z - a.z;
+      const len = Math.hypot(tx, tz);
+      if(len < 1e-6) continue;
+      tx /= len; tz /= len;
+      const px = -tz, pz = tx; // perpendicular, same left-hand convention as buildStationMarkers3D
+      const aNL = [a.x+px*a.halfN, a.yN, a.z+pz*a.halfN], aNR = [a.x-px*a.halfN, a.yN, a.z-pz*a.halfN];
+      const aWL = [a.x+px*a.halfW, a.yW, a.z+pz*a.halfW], aWR = [a.x-px*a.halfW, a.yW, a.z-pz*a.halfW];
+      const bNL = [b.x+px*b.halfN, b.yN, b.z+pz*b.halfN], bNR = [b.x-px*b.halfN, b.yN, b.z-pz*b.halfN];
+      const bWL = [b.x+px*b.halfW, b.yW, b.z+pz*b.halfW], bWR = [b.x-px*b.halfW, b.yW, b.z-pz*b.halfW];
+      const ac = [a.c.r, a.c.g, a.c.b], bc = [b.c.r, b.c.g, b.c.b];
+      const quad = (p1,p2,p3,p4,c1,c2,c3,c4) => {
+        positions.push(...p1,...p2,...p3, ...p1,...p3,...p4);
+        colors.push(...c1,...c2,...c3, ...c1,...c3,...c4);
+      };
+      quad(aWL, aNL, bNL, bWL, ac, ac, bc, bc); // left slope face
+      quad(aNL, aNR, bNR, bNL, ac, ac, bc, bc); // narrow band (trench floor / embankment crest)
+      quad(aNR, aWR, bWR, bNR, ac, ac, bc, bc); // right slope face
+    }
+    seg = [];
+  }
+
+  profile.forEach(p => {
+    if(p.elev == null){ flushSeg(); return; }
+    const [ux, uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
+    const { x, z } = utmToLocal3D(ux, uy);
+    const design = designElevAt(p.dist);
+    const depth = p.elev - design;
+    const absDepth = Math.abs(depth);
+    const halfN = bottomWidth / 2;
+    const halfW = halfN + sideSlope * absDepth;
+    seg.push({
+      x, z, halfN, halfW,
+      yN: (design - meanElev) * ve + LIFT,
+      yW: (p.elev - meanElev) * ve + LIFT,
+      c: depth >= 0 ? cutColor : fillColor
+    });
+  });
+  flushSeg();
+
+  if(!positions.length) return null;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+  const material = new THREE.MeshStandardMaterial({
+    vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.82, roughness: 0.9, metalness: 0
+  });
+  return new THREE.Mesh(geometry, material);
 }
 
 async function applyTerrainMaterial(mode){
@@ -2198,6 +2347,17 @@ let designGradeNextId = 1;
 // pointed at a detached element whose getBoundingClientRect() silently returns all zeros,
 // sending the dragged point flying to the far end of the line. Everything is recomputed fresh,
 // every tick, from the live DOM and current profile/designGrade state instead.
+// Current visible X (distance) window on the chart - null means "full extent, auto". Set by
+// wheel-zoom/drag-pan below. Must be read fresh via currentXRange() (never cached) by both the
+// render path and the grade-drag handler right below, same discipline as the frozen Y-range, so a
+// zoomed-in drag maps pixels to the right distance instead of silently falling back to the full line.
+let chartXView = null;
+function currentXRange(prof){
+  const fullMaxM = prof[prof.length-1].dist || 1;
+  if(!chartXView) return { xMinM: 0, xMaxM: fullMaxM, fullMaxM };
+  return { xMinM: chartXView.min, xMaxM: chartXView.max, fullMaxM };
+}
+
 let gradeDragState = { active: false };
 document.addEventListener('mousemove', (ev) => {
   if(!gradeDragState.active || !designGrade || !profile) return;
@@ -2209,7 +2369,7 @@ document.addEventListener('mousemove', (ev) => {
 
   const pad = { l:58, r:16, t:18, b:32 };
   const w = parseFloat(svg.getAttribute('width')), h = parseFloat(svg.getAttribute('height'));
-  const xMinM = 0, xMaxM = profile[profile.length-1].dist || 1;
+  const { xMinM, xMaxM } = currentXRange(profile);
   // Frozen at drag-start (see gradeDragState's own comment) so the scale doesn't shift under
   // the cursor mid-drag - using a live-recomputed range here made the point feel "wonky"/laggy
   // relative to the mouse, since moving the point also moved the axis it was being measured against.
@@ -2229,6 +2389,26 @@ document.addEventListener('mouseup', () => {
   gradeDragState.active = false;
   refreshChart(); // settle to the real auto-fit scale now that the drag is done
 });
+
+// Click-drag panning on the chart, once zoomed in via the wheel handler in renderChartInto.
+// Registered once at module scope, same reasoning as gradeDragState above: refreshChart() rebuilds
+// the <svg> on every tick, so nothing here may cache DOM/geometry across the drag - only plain
+// numbers captured at mousedown (start pointer X, start view range, chart width/padding), which
+// stay valid regardless of what gets rebuilt underneath.
+let chartPanState = null;
+document.addEventListener('mousemove', (ev) => {
+  if(!chartPanState) return;
+  const { startClientX, startMin, startMax, w, pad, fullMaxM } = chartPanState;
+  const metersPerPx = (startMax - startMin) / (w - pad.l - pad.r);
+  const dM = (ev.clientX - startClientX) * metersPerPx;
+  let newMin = startMin - dM, newMax = startMax - dM;
+  if(newMin < 0){ newMax -= newMin; newMin = 0; }
+  if(newMax > fullMaxM){ newMin -= (newMax - fullMaxM); newMax = fullMaxM; }
+  newMin = Math.max(0, newMin);
+  chartXView = (newMin <= 1e-6 && newMax >= fullMaxM - 1e-6) ? null : { min: newMin, max: newMax };
+  refreshChart();
+});
+document.addEventListener('mouseup', () => { chartPanState = null; });
 
 // Design elevation at any distance, extrapolating past the first/last point using that segment's
 // own slope so cut/fill stays defined even if a point gets dragged inside the line's real extent.
@@ -2259,7 +2439,11 @@ function designElevAt(dist){
 // from a previous render (dragging triggers a full chart rebuild on every tick, so anything
 // captured at mousedown - the old SVG element included - goes stale after the very first move).
 function computeChartYRange(prof, xMinM, xMaxM){
-  const elevsM = prof.filter(p=>p.elev!=null).map(p=>p.elev);
+  // Only the currently-visible slice (relevant once the chart is wheel-zoomed to a sub-range) -
+  // otherwise zooming in horizontally would still show the Y axis scaled to the whole line's
+  // elevation range, which defeats the point of zooming in to see vertical detail.
+  const visible = prof.filter(p => p.elev!=null && p.dist >= xMinM && p.dist <= xMaxM);
+  const elevsM = (visible.length ? visible : prof.filter(p=>p.elev!=null)).map(p=>p.elev);
   let realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
   if(designGrade){
     designGrade.points.forEach(pt => { if(pt.elev < realMin) realMin = pt.elev; if(pt.elev > realMax) realMax = pt.elev; });
@@ -2354,6 +2538,7 @@ document.getElementById('btnRemoveGrade').addEventListener('click', () => {
   document.getElementById('gradeEmptyState').style.display = '';
   document.getElementById('gradeEditor').style.display = 'none';
   refreshChart();
+  refreshDesignOverlay3DIfOpen();
 });
 document.getElementById('btnAddGradePoint').addEventListener('click', () => {
   if(!designGrade) return;
@@ -2421,6 +2606,7 @@ function renderCutFillStats(){
   document.getElementById('cutFillStats').innerHTML = rows.map(([label,value,cls]) =>
     '<div class="stat"><div class="label">' + label + '</div><div class="value' + (cls?' '+cls:'') + '">' + value + '</div></div>'
   ).join('');
+  refreshDesignOverlay3DIfOpen();
 }
 function volumeStr(m3){
   const v = unitSystem === 'imperial' ? m3 * 35.3147 : m3;
@@ -2467,7 +2653,8 @@ function refreshChart(){
 
 function updateDatumNote(){
   const veText = veMode === 'auto' ? '' : (' · Vertical exaggeration: ' + veMode + '×');
-  const text = 'Vertical datum: CGVD2013 (gravity-related height) · Horizontal: WGS84 (EPSG:4326)' + veText;
+  const zoomText = chartXView ? ' · Zoomed — double-click chart to reset' : ' · Scroll on chart to zoom, drag to pan';
+  const text = 'Vertical datum: CGVD2013 (gravity-related height) · Horizontal: WGS84 (EPSG:4326)' + veText + zoomText;
   const a = document.getElementById('datumNote'); if(a) a.textContent = text;
   const b = document.getElementById('modalDatumNote'); if(b) b.textContent = text;
 }
@@ -2478,7 +2665,7 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   const w = wrap.clientWidth || (expanded ? 900 : 380);
   const pad = { l:58, r:16, t:18, b:32 };
 
-  const xMinM = 0, xMaxM = prof[prof.length-1].dist || 1;
+  const { xMinM, xMaxM, fullMaxM } = currentXRange(prof);
   // While actively dragging a grade point, keep the vertical scale frozen at whatever it was
   // when the drag started, rather than recomputing it every tick - otherwise the axis rescales
   // in response to the very point you're moving, so the ground shifts under your cursor and the
@@ -2675,6 +2862,34 @@ function renderChartInto(prof, wrap, tooltip, expanded){
     showStation(nearestIdx, false);
   });
   svg.addEventListener('mouseleave', hideStation);
+
+  // Mousewheel zoom, centered on the cursor's position along the distance axis - and, since a
+  // zoomed-in view is useless without a way to move along it, click-drag panning and a double-click
+  // to reset back to the full line. The actual drag tracking lives in the single document-level
+  // listener pair registered once near gradeDragState above; this just seeds chartPanState with
+  // plain numbers (never the svg/pad objects themselves) at the moment the drag starts.
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    const frac = Math.min(1, Math.max(0, (mx - pad.l) / (w - pad.l - pad.r)));
+    const centerD = xMinM + frac * (xMaxM - xMinM);
+    const factor = Math.exp(ev.deltaY * 0.0015);
+    const minWidth = Math.max(fullMaxM * 0.01, 3);
+    let newWidth = Math.max(minWidth, Math.min(fullMaxM, (xMaxM - xMinM) * factor));
+    let newMin = centerD - frac * newWidth;
+    let newMax = newMin + newWidth;
+    if(newMin < 0){ newMax -= newMin; newMin = 0; }
+    if(newMax > fullMaxM){ newMin -= (newMax - fullMaxM); newMax = fullMaxM; }
+    newMin = Math.max(0, newMin);
+    chartXView = (newMin <= 1e-6 && newMax >= fullMaxM - 1e-6) ? null : { min: newMin, max: newMax };
+    refreshChart();
+  }, { passive: false });
+  svg.addEventListener('mousedown', (ev) => {
+    if(gradeDragState.active) return; // a grade handle's own mousedown already stopped propagation anyway
+    chartPanState = { startClientX: ev.clientX, startMin: xMinM, startMax: xMaxM, w, pad, fullMaxM };
+  });
+  svg.addEventListener('dblclick', () => { chartXView = null; refreshChart(); });
 
   wrap.appendChild(svg);
 }
