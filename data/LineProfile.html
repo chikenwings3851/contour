@@ -630,7 +630,7 @@
       <div id="view3dStatus"></div>
       <canvas id="view3dCanvas"></canvas>
     </div>
-    <div class="datum-note">Drag to orbit · scroll to zoom · right-drag to pan · W/A/S/D or arrow keys to fly forward/back/strafe. No downsampling — full native 0.5m LiDAR resolution.</div>
+    <div class="datum-note">Drag to pan · right-drag to rotate/tilt · scroll to zoom toward your cursor (like Google Earth) · W/A/S/D or arrow keys to fly. No downsampling — full native 0.5m LiDAR resolution.</div>
   </div>
 </div>
 
@@ -1598,6 +1598,48 @@ function applyFlyMovement3D(){
   view3dControls.target.add(move);
 }
 
+// Finds the real ground point under the cursor (raycast against the terrain mesh; falls back to
+// the horizontal plane through the current orbit target if the cursor is off the edge of the
+// mesh, e.g. pointed at the sky), used to make scroll-zoom pull that exact point toward the
+// viewer - the thing that makes Google Earth's zoom feel like it's diving into the map instead of
+// just shrinking everything toward a fixed center.
+function raycastTerrainAtClient(clientX, clientY, canvas){
+  const rect = canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, view3dCamera);
+  if(view3dMesh){
+    const hits = raycaster.intersectObject(view3dMesh);
+    if(hits.length) return hits[0].point;
+  }
+  const plane = new THREE.Plane(new THREE.Vector3(0,1,0), -view3dControls.target.y);
+  const hit = new THREE.Vector3();
+  return raycaster.ray.intersectPlane(plane, hit) ? hit : view3dControls.target.clone();
+}
+
+// Moves the camera (and, critically, the orbit target with it) a fraction of the way toward
+// `point` - positive `amount` zooms in, negative zooms out. Moving the target along is what keeps
+// a later rotate gesture pivoting around roughly what's on screen instead of some stale point far
+// away from wherever the last zoom left off.
+function dollyTowardPoint3D(point, amount){
+  const camVec = new THREE.Vector3().subVectors(point, view3dCamera.position);
+  const dist = camVec.length();
+  if(dist < 1e-6) return;
+  const minDist = Math.max((view3dSceneRadius || 1) * 0.002, 0.5);
+  const maxDist = (view3dSceneRadius || 1000) * 8;
+  let moveDist = dist * amount;
+  const newDist = dist - moveDist;
+  if(newDist < minDist) moveDist = dist - minDist;
+  if(newDist > maxDist) moveDist = dist - maxDist;
+  const move = camVec.normalize().multiplyScalar(moveDist);
+  view3dCamera.position.add(move);
+  view3dControls.target.add(move);
+  view3dControls.update();
+}
+
 function closeView3D(){
   view3dOpen = false;
   document.getElementById('view3dModal').style.display = 'none';
@@ -1639,6 +1681,26 @@ function initThreeScene(){
     view3dControls = new THREE.OrbitControls(view3dCamera, canvas);
     view3dControls.enableDamping = true;
     view3dControls.dampingFactor = 0.08;
+    // Google Earth's actual scheme, not stock OrbitControls' "spin an object in your hand": drag
+    // slides you across the ground (pan), right-drag tilts/rotates the view, and - the part that
+    // was making this feel "weird" - the built-in scroll-zoom is replaced entirely below with a
+    // version that zooms toward whatever ground point is under the cursor AND drags the orbit
+    // pivot to that point. Stock OrbitControls never moves its target on zoom, so zooming in on
+    // one end of a long corridor left the pivot stranded back at the original center - the next
+    // rotate would swing wildly around a point nowhere near what was on screen. That mismatch was
+    // the real cause of the disorientation, more than anything about the pan/rotate bindings.
+    view3dControls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+    view3dControls.screenSpacePanning = false; // pan slides across the ground plane, not the tilted view plane
+    view3dControls.enableZoom = false; // replaced by dollyTowardPoint3D()'s cursor-centered zoom below
+
+    canvas.addEventListener('wheel', (ev) => {
+      ev.preventDefault();
+      const point = raycastTerrainAtClient(ev.clientX, ev.clientY, canvas);
+      dollyTowardPoint3D(point, -ev.deltaY * 0.0015);
+    }, { passive: false });
+    canvas.addEventListener('dblclick', (ev) => {
+      dollyTowardPoint3D(raycastTerrainAtClient(ev.clientX, ev.clientY, canvas), 0.6);
+    });
 
     view3dScene.add(new THREE.AmbientLight(0xffffff, 0.55));
     const sun = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -2072,6 +2134,7 @@ async function applyTerrainMaterial(mode){
 makeDraggable(document.querySelector('.xs-panel'), document.getElementById('xsDragHandle'));
 
 let xsOpen = false, xsStations = [];
+let xsCurrentStationDist = null, xsStationMapMarker = null; // "which cross-section am I on" highlight, shown on both the map and the elevation chart
 
 document.getElementById('btnCrossSection3d').addEventListener('click', () => openCrossSectionModal());
 document.getElementById('btnCloseXs').addEventListener('click', () => closeCrossSectionModal());
@@ -2083,6 +2146,27 @@ document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && xsOpen) c
 function closeCrossSectionModal(){
   xsOpen = false;
   document.getElementById('xsModal').style.display = 'none';
+  xsCurrentStationDist = null;
+  updateXsHighlight();
+}
+
+// Marks, on both the map and the main elevation chart, exactly which station the Cross Section
+// panel is currently showing - separate from the mouse-hover crosshair (which disappears the
+// instant the cursor leaves), so the "where am I" indicator stays put while you're reading the
+// cross-section panel instead of hovering anything.
+function updateXsHighlight(){
+  if(profile) refreshChart();
+  const p = xsCurrentStationDist != null ? profilePointAtDist(xsCurrentStationDist) : null;
+  if(p && p.elev != null){
+    if(!xsStationMapMarker){
+      xsStationMapMarker = L.circleMarker([p.lat, p.lon], { radius:8, color:'#fff', weight:3, fillColor:'#7c3aed', fillOpacity:1 }).addTo(map);
+    } else {
+      xsStationMapMarker.setLatLng([p.lat, p.lon]);
+    }
+  } else if(xsStationMapMarker){
+    map.removeLayer(xsStationMapMarker);
+    xsStationMapMarker = null;
+  }
 }
 
 function openCrossSectionModal(){
@@ -2145,6 +2229,8 @@ async function fetchCrossSection(stationDist, bufferM){
 }
 
 async function loadCrossSection(stationDist){
+  xsCurrentStationDist = stationDist;
+  updateXsHighlight();
   const statusDiv = document.getElementById('xsStatus');
   const wrap = document.getElementById('xsChartWrap');
   statusDiv.className = '';
@@ -2231,6 +2317,36 @@ function renderCrossSectionChart(xsPoints, stationDist){
   const area = document.createElementNS(NS,'path');
   area.setAttribute('d',a); area.setAttribute('fill','rgba(91,91,240,0.15)'); area.setAttribute('stroke','none');
   svg.appendChild(area);
+
+  // The proposed trapezoid template (bottom width + side slopes) at this one station - same
+  // single-depth formula as everywhere else in the app (the 3D channel, the volume math): depth is
+  // ground-vs-design AT THE CENTRELINE only, not a true daylight search against this station's real
+  // (possibly cross-sloped) ground on either side. That keeps this drawing consistent with the
+  // volume/3D numbers instead of quietly using a different, more "accurate" method that would show
+  // a different shape than what the stats panel actually calculated.
+  if(designGrade && stationDist != null){
+    const centreGround = profilePointAtDist(stationDist);
+    if(centreGround && centreGround.elev != null){
+      const designElevHere = designElevAt(stationDist);
+      const depth = Math.abs(centreGround.elev - designElevHere);
+      const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
+      const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+      const halfN = bottomWidth / 2, halfW = halfN + sideSlope * depth;
+      const shapeColor = centreGround.elev >= designElevHere ? '#e0483e' : '#0d9f6e'; // matches the 2D profile's cut/fill bands and the 3D channel
+      const shape = document.createElementNS(NS,'path');
+      shape.setAttribute('d',
+        'M'+X(-halfW).toFixed(1)+','+Y(centreGround.elev).toFixed(1)+' ' +
+        'L'+X(-halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' ' +
+        'L'+X(halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' ' +
+        'L'+X(halfW).toFixed(1)+','+Y(centreGround.elev).toFixed(1)+' '
+      );
+      shape.setAttribute('fill', shapeColor); shape.setAttribute('fill-opacity','0.28');
+      shape.setAttribute('stroke', shapeColor); shape.setAttribute('stroke-width','2.25');
+      shape.setAttribute('stroke-linejoin','round');
+      svg.appendChild(shape);
+    }
+  }
+
   const lineEl = document.createElementNS(NS,'path');
   lineEl.setAttribute('d',d); lineEl.setAttribute('fill','none'); lineEl.setAttribute('stroke',PALETTE.accentDark); lineEl.setAttribute('stroke-width','2.25');
   lineEl.setAttribute('stroke-linejoin','round'); lineEl.setAttribute('stroke-linecap','round');
@@ -2839,6 +2955,26 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   cross.setAttribute('stroke-dasharray','3,3');
   cross.style.display = 'none';
   svg.appendChild(cross);
+
+  // Persistent "which cross-section am I on" marker - independent of mouse hover, so it stays put
+  // while the Cross Section panel is open instead of vanishing the moment the cursor leaves.
+  if(xsOpen && xsCurrentStationDist != null){
+    const xsp = profilePointAtDist(xsCurrentStationDist);
+    if(xsp && xsp.elev != null && xsp.dist >= xMinM && xsp.dist <= xMaxM){
+      const xx = X(xsp.dist), xy = Y(xsp.elev);
+      const xsTick = document.createElementNS(NS,'line');
+      xsTick.setAttribute('x1', xx); xsTick.setAttribute('x2', xx);
+      xsTick.setAttribute('y1', pad.t); xsTick.setAttribute('y2', h - pad.b);
+      xsTick.setAttribute('stroke', '#7c3aed'); xsTick.setAttribute('stroke-width', '1.5');
+      xsTick.setAttribute('stroke-dasharray', '2,4'); xsTick.setAttribute('opacity', '0.7');
+      svg.appendChild(xsTick);
+      const xsDot = document.createElementNS(NS,'circle');
+      xsDot.setAttribute('cx', xx); xsDot.setAttribute('cy', xy);
+      xsDot.setAttribute('r', expanded ? '8' : '6.5');
+      xsDot.setAttribute('fill', 'none'); xsDot.setAttribute('stroke', '#7c3aed'); xsDot.setAttribute('stroke-width', '3');
+      svg.appendChild(xsDot);
+    }
+  }
 
   const dot = document.createElementNS(NS,'circle');
   dot.setAttribute('r', expanded ? '5' : '4'); dot.setAttribute('fill','#ffffff');
