@@ -2200,7 +2200,10 @@ document.addEventListener('mousemove', (ev) => {
   const pad = { l:58, r:16, t:18, b:32 };
   const w = parseFloat(svg.getAttribute('width')), h = parseFloat(svg.getAttribute('height'));
   const xMinM = 0, xMaxM = profile[profile.length-1].dist || 1;
-  const { yMinM, yMaxM } = computeChartYRange(profile, xMinM, xMaxM);
+  // Frozen at drag-start (see gradeDragState's own comment) so the scale doesn't shift under
+  // the cursor mid-drag - using a live-recomputed range here made the point feel "wonky"/laggy
+  // relative to the mouse, since moving the point also moved the axis it was being measured against.
+  const { yMinM, yMaxM } = gradeDragState.frozenRange;
 
   const rect = svg.getBoundingClientRect();
   const mx = Math.max(pad.l, Math.min(w-pad.r, ev.clientX - rect.left));
@@ -2211,7 +2214,11 @@ document.addEventListener('mousemove', (ev) => {
   renderGradeEditor();
   refreshChart();
 });
-document.addEventListener('mouseup', () => { gradeDragState.active = false; });
+document.addEventListener('mouseup', () => {
+  if(!gradeDragState.active) return;
+  gradeDragState.active = false;
+  refreshChart(); // settle to the real auto-fit scale now that the drag is done
+});
 
 // Design elevation at any distance, extrapolating past the first/last point using that segment's
 // own slope so cut/fill stays defined even if a point gets dragged inside the line's real extent.
@@ -2438,7 +2445,12 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   const pad = { l:58, r:16, t:18, b:32 };
 
   const xMinM = 0, xMaxM = prof[prof.length-1].dist || 1;
-  const { yMinM, yMaxM } = computeChartYRange(prof, xMinM, xMaxM);
+  // While actively dragging a grade point, keep the vertical scale frozen at whatever it was
+  // when the drag started, rather than recomputing it every tick - otherwise the axis rescales
+  // in response to the very point you're moving, so the ground shifts under your cursor and the
+  // point never quite tracks the mouse (the "wonky" feeling). It re-settles to a proper auto-fit
+  // the instant you let go (see the mouseup handler below).
+  const { yMinM, yMaxM } = gradeDragState.active ? gradeDragState.frozenRange : computeChartYRange(prof, xMinM, xMaxM);
 
   const baseH = expanded ? 520 : 230;
   let h = baseH;
@@ -2585,7 +2597,9 @@ function renderChartInto(prof, wrap, tooltip, expanded){
       handle.addEventListener('mousedown', (ev) => {
         // Only `wrap` is stored (never the svg/pad/geometry themselves) - see gradeDragState's
         // own comment for why: this element is about to be destroyed on the very first drag tick.
-        gradeDragState = { active:true, pointId: pt.id, wrap };
+        // The vertical scale IS captured once here and held fixed for the whole drag, so the
+        // point tracks the mouse 1:1 instead of the axis rescaling under it every frame.
+        gradeDragState = { active:true, pointId: pt.id, wrap, frozenRange: { yMinM, yMaxM } };
         ev.preventDefault(); ev.stopPropagation();
       });
       svg.appendChild(handle);
