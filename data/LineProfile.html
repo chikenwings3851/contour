@@ -304,6 +304,14 @@
     background:#0e1420;z-index:2;
   }
   #view3dStatus.hidden{display:none;}
+  .xs-panel{width:min(700px,92vw);}
+  #xsStatus{font-size:12.5px;color:var(--text-dim);margin-bottom:10px;}
+  #xsStatus.err{color:var(--danger);}
+  #xsChartWrap{
+    background:var(--surface-2);border-radius:10px;border:1px solid var(--border);
+    position:relative;min-height:220px;
+  }
+  #xsStationSelect{max-width:140px;}
   .drag-dots{color:var(--text-faint);}
 </style>
 </head>
@@ -562,6 +570,7 @@
         </div>
         <button id="btnToggleStations3d" class="ghost-active">📍 Stations</button>
         <button id="btnToggleLine3d" class="ghost-active">📏 Line</button>
+        <button id="btnCrossSection3d">✂ Cross Section</button>
         <button id="btnCloseView3d" class="icon-btn">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
@@ -572,6 +581,30 @@
       <canvas id="view3dCanvas"></canvas>
     </div>
     <div class="datum-note">Drag to orbit · scroll to zoom · right-drag to pan. No downsampling — full native 0.5m LiDAR resolution.</div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="xsModal">
+  <div class="modal-panel xs-panel">
+    <div class="modal-head" id="xsDragHandle">
+      <h3>
+        <svg class="drag-dots" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.6"/><circle cx="16" cy="6" r="1.6"/><circle cx="8" cy="12" r="1.6"/><circle cx="16" cy="12" r="1.6"/><circle cx="8" cy="18" r="1.6"/><circle cx="16" cy="18" r="1.6"/></svg>
+        Cross Section
+      </h3>
+      <div class="modal-head-right">
+        <button id="xsPrev" class="icon-btn">‹</button>
+        <select id="xsStationSelect"></select>
+        <button id="xsNext" class="icon-btn">›</button>
+        <button id="btnCloseXs" class="icon-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="xsStatus"></div>
+    <div id="xsChartWrap">
+      <div class="chart-tooltip" id="xsChartTooltip"></div>
+    </div>
+    <div class="datum-note">The alignment (your drawn line) sits at the centre (0m) — negative is left, positive is right, facing along the direction you drew it.</div>
   </div>
 </div>
 
@@ -1773,6 +1806,211 @@ async function applyTerrainMaterial(mode){
     view3dMesh.material.color.set(0x8a9bb0);
     view3dMesh.material.needsUpdate = true;
   }
+}
+
+// ---------- cross sections ----------
+// A classic road/drain design-sheet view: a real perpendicular slice across the corridor at a
+// chosen station, fetched fresh from the DTM (not derived from the corridor's axis-aligned grid,
+// which doesn't line up with the alignment's true local perpendicular unless the line is dead
+// straight along a UTM axis) - reuses the same retry-hardened fetchElevationChunk() as everything
+// else, so a flaky server response here degrades the same honest way it does elsewhere.
+
+makeDraggable(document.querySelector('.xs-panel'), document.getElementById('xsDragHandle'));
+
+let xsOpen = false, xsStations = [];
+
+document.getElementById('btnCrossSection3d').addEventListener('click', () => openCrossSectionModal());
+document.getElementById('btnCloseXs').addEventListener('click', () => closeCrossSectionModal());
+document.getElementById('xsStationSelect').addEventListener('change', (e) => loadCrossSection(parseFloat(e.target.value)));
+document.getElementById('xsPrev').addEventListener('click', () => stepStation(-1));
+document.getElementById('xsNext').addEventListener('click', () => stepStation(1));
+document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && xsOpen) closeCrossSectionModal(); });
+
+function closeCrossSectionModal(){
+  xsOpen = false;
+  document.getElementById('xsModal').style.display = 'none';
+}
+
+function openCrossSectionModal(){
+  if(!view3dGridInfo || !profile || profile.length < 2) return;
+  xsOpen = true;
+  document.getElementById('xsModal').style.display = 'block';
+  const totalLen = profile[profile.length-1].dist;
+  const interval = niceGridSpacing(totalLen, 15);
+  xsStations = [];
+  for(let d = 0; d <= totalLen + 1e-6; d += interval) xsStations.push(Math.min(d, totalLen));
+  const sel = document.getElementById('xsStationSelect');
+  sel.innerHTML = xsStations.map(d => '<option value="' + d + '">' + fmtStation(d) + '</option>').join('');
+  loadCrossSection(xsStations[0]);
+}
+
+function stepStation(delta){
+  const sel = document.getElementById('xsStationSelect');
+  const idx = sel.selectedIndex + delta;
+  if(idx >= 0 && idx < sel.options.length){
+    sel.selectedIndex = idx;
+    loadCrossSection(parseFloat(sel.value));
+  }
+}
+
+// Builds a short perpendicular line at the station (using the same local-tangent estimation as
+// the 3D station markers) and fetches real elevation samples across it via getSamples.
+async function fetchCrossSection(stationDist, bufferM){
+  const p = profilePointAtDist(stationDist);
+  if(!p || p.elev == null) throw new Error('no elevation data at this station');
+  const microStep = Math.min(2, stationDist, profile[profile.length-1].dist - stationDist) || 0.5;
+  const back = profilePointAtDist(Math.max(0, stationDist - microStep));
+  const fwd = profilePointAtDist(Math.min(profile[profile.length-1].dist, stationDist + microStep));
+  const epsg = 'EPSG:' + view3dGridInfo.sr;
+  const [ux, uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
+
+  let dx = 1, dz = 0;
+  if(back && fwd && back.elev != null && fwd.elev != null){
+    const [bx, by] = proj4('WGS84', epsg, [back.lon, back.lat]);
+    const [fx, fy] = proj4('WGS84', epsg, [fwd.lon, fwd.lat]);
+    dx = fx - bx; dz = fy - by;
+    const len = Math.hypot(dx, dz) || 1; dx /= len; dz /= len;
+  }
+  const perpX = -dz, perpZ = dx;
+
+  const leftUTM = [ux - perpX*bufferM, uy - perpZ*bufferM];
+  const rightUTM = [ux + perpX*bufferM, uy + perpZ*bufferM];
+  const [leftLon, leftLat] = proj4(epsg, 'WGS84', leftUTM);
+  const [rightLon, rightLat] = proj4(epsg, 'WGS84', rightUTM);
+
+  const sampleCount = Math.max(40, Math.min(300, Math.round(bufferM * 2 / 0.5)));
+  const samples = await fetchElevationChunk([{ lat: leftLat, lng: leftLon }, { lat: rightLat, lng: rightLon }], sampleCount);
+  if(!samples) throw new Error('elevation service unavailable for this cross-section (even after retrying)');
+
+  let cum = 0, prev = null;
+  return samples.map(s => {
+    if(prev) cum += haversine(prev.lat, prev.lon, s.lat, s.lon);
+    prev = s;
+    return { offset: cum - bufferM, elev: s.elev };
+  });
+}
+
+async function loadCrossSection(stationDist){
+  const statusDiv = document.getElementById('xsStatus');
+  const wrap = document.getElementById('xsChartWrap');
+  statusDiv.className = '';
+  statusDiv.textContent = 'Fetching cross-section at ' + fmtStation(stationDist) + '…';
+  wrap.querySelectorAll('svg').forEach(n => n.remove());
+  try{
+    const bufferM = parseFloat(document.getElementById('corridorWidth').value);
+    const xsPoints = await fetchCrossSection(stationDist, bufferM);
+    renderCrossSectionChart(xsPoints);
+    const valid = xsPoints.filter(p => p.elev != null);
+    const left = valid[0], right = valid[valid.length-1];
+    const grade = (left && right) ? ((right.elev - left.elev) / (bufferM*2) * 100) : null;
+    statusDiv.textContent = fmtStation(stationDist) + ' · width ' + fmtDist(bufferM*2) +
+      (grade != null ? ' · left→right cross-slope ' + grade.toFixed(1) + '%' : ' · no valid data across this section');
+  } catch(err){
+    statusDiv.className = 'err';
+    statusDiv.textContent = 'Could not build cross-section: ' + err.message;
+  }
+}
+
+function renderCrossSectionChart(xsPoints){
+  const wrap = document.getElementById('xsChartWrap');
+  const tooltip = document.getElementById('xsChartTooltip');
+  const w = wrap.clientWidth || 640, h = 230;
+  const pad = { l: 54, r: 16, t: 16, b: 30 };
+
+  const valid = xsPoints.filter(p => p.elev != null);
+  if(!valid.length) return;
+  const realMin = Math.min(...valid.map(p=>p.elev)), realMax = Math.max(...valid.map(p=>p.elev));
+  const span = Math.max(realMax - realMin, 0.5);
+  const yMin = realMin - span*0.12, yMax = realMax + span*0.12;
+  const xMin = xsPoints[0].offset, xMax = xsPoints[xsPoints.length-1].offset;
+
+  const X = o => pad.l + (o - xMin) / (xMax - xMin) * (w - pad.l - pad.r);
+  const Y = e => pad.t + (1 - (e - yMin) / (yMax - yMin)) * (h - pad.t - pad.b);
+
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('width', w); svg.setAttribute('height', h);
+  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+  svg.style.display = 'block';
+
+  for(let i=0;i<=4;i++){
+    const e = yMin + (yMax-yMin)*i/4, y = Y(e);
+    const line = document.createElementNS(NS,'line');
+    line.setAttribute('x1',pad.l); line.setAttribute('x2',w-pad.r); line.setAttribute('y1',y); line.setAttribute('y2',y);
+    line.setAttribute('stroke', PALETTE.gridLine); line.setAttribute('stroke-width','1');
+    svg.appendChild(line);
+    const label = document.createElementNS(NS,'text');
+    label.setAttribute('x',pad.l-8); label.setAttribute('y',y+3); label.setAttribute('text-anchor','end');
+    label.setAttribute('font-size','10'); label.setAttribute('font-family','JetBrains Mono, monospace'); label.setAttribute('fill',PALETTE.axisText);
+    label.textContent = elevValue(e).toFixed(1);
+    svg.appendChild(label);
+  }
+  [xMin, 0, xMax].forEach((o, i) => {
+    const x = X(o);
+    const label = document.createElementNS(NS,'text');
+    label.setAttribute('x',x); label.setAttribute('y',h-pad.b+17);
+    label.setAttribute('text-anchor', i===0?'start':(i===2?'end':'middle'));
+    label.setAttribute('font-size','10'); label.setAttribute('font-family','JetBrains Mono, monospace'); label.setAttribute('fill',PALETTE.axisText);
+    label.textContent = (i===1 ? 'centre (line) ' : '') + fmtDist(Math.abs(o)) + (o<0?' L':(o>0?' R':''));
+    svg.appendChild(label);
+  });
+
+  let d = '', a = '', open = false;
+  xsPoints.forEach(p => {
+    if(p.elev == null){ open = false; return; }
+    const x = X(p.offset), y = Y(p.elev);
+    if(!open){ d += 'M'+x.toFixed(1)+','+y.toFixed(1)+' '; a += 'M'+x.toFixed(1)+','+Y(yMin).toFixed(1)+' L'+x.toFixed(1)+','+y.toFixed(1)+' '; open=true; }
+    else { d += 'L'+x.toFixed(1)+','+y.toFixed(1)+' '; a += 'L'+x.toFixed(1)+','+y.toFixed(1)+' '; }
+  });
+  const area = document.createElementNS(NS,'path');
+  area.setAttribute('d',a); area.setAttribute('fill','rgba(91,91,240,0.15)'); area.setAttribute('stroke','none');
+  svg.appendChild(area);
+  const lineEl = document.createElementNS(NS,'path');
+  lineEl.setAttribute('d',d); lineEl.setAttribute('fill','none'); lineEl.setAttribute('stroke',PALETTE.accentDark); lineEl.setAttribute('stroke-width','2.25');
+  lineEl.setAttribute('stroke-linejoin','round'); lineEl.setAttribute('stroke-linecap','round');
+  svg.appendChild(lineEl);
+
+  // Mark the alignment (offset = 0) explicitly - this is what the whole chart is oriented around.
+  const centreX = X(0);
+  const centreLine = document.createElementNS(NS,'line');
+  centreLine.setAttribute('x1',centreX); centreLine.setAttribute('x2',centreX);
+  centreLine.setAttribute('y1',pad.t); centreLine.setAttribute('y2',h-pad.b);
+  centreLine.setAttribute('stroke',PALETTE.doneLine); centreLine.setAttribute('stroke-width','1.5'); centreLine.setAttribute('stroke-dasharray','4,3');
+  svg.appendChild(centreLine);
+
+  const axisX = document.createElementNS(NS,'line');
+  axisX.setAttribute('x1',pad.l); axisX.setAttribute('x2',w-pad.r); axisX.setAttribute('y1',h-pad.b); axisX.setAttribute('y2',h-pad.b);
+  axisX.setAttribute('stroke',PALETTE.axisLine); axisX.setAttribute('stroke-width','1');
+  svg.appendChild(axisX);
+
+  const cross = document.createElementNS(NS,'line');
+  cross.setAttribute('y1',pad.t); cross.setAttribute('y2',h-pad.b);
+  cross.setAttribute('stroke',PALETTE.hoverCross); cross.setAttribute('stroke-width','1'); cross.setAttribute('stroke-dasharray','3,3');
+  cross.style.display = 'none';
+  svg.appendChild(cross);
+  const dot = document.createElementNS(NS,'circle');
+  dot.setAttribute('r','4'); dot.setAttribute('fill','#fff'); dot.setAttribute('stroke',PALETTE.accentDark); dot.setAttribute('stroke-width','2.5');
+  dot.style.display = 'none';
+  svg.appendChild(dot);
+
+  svg.addEventListener('mousemove', (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    if(mx < pad.l || mx > w-pad.r){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; return; }
+    const o = xMin + (mx-pad.l)/(w-pad.l-pad.r)*(xMax-xMin);
+    let nearest = xsPoints[0], best = Infinity;
+    for(const p of xsPoints){ const diff = Math.abs(p.offset-o); if(diff<best){ best=diff; nearest=p; } }
+    if(nearest.elev == null){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; return; }
+    const x = X(nearest.offset), y = Y(nearest.elev);
+    cross.setAttribute('x1',x); cross.setAttribute('x2',x); cross.style.display='';
+    dot.setAttribute('cx',x); dot.setAttribute('cy',y); dot.style.display='';
+    tooltip.style.display = '';
+    tooltip.style.left = Math.min(x+8, w-140)+'px';
+    tooltip.style.top = Math.max(y-40,2)+'px';
+    tooltip.innerHTML = fmtDist(Math.abs(nearest.offset)) + (nearest.offset<0?' L':(nearest.offset>0?' R':' (centre)')) + '<br>elev ' + fmtElev(nearest.elev);
+  });
+  svg.addEventListener('mouseleave', () => { cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; });
+
+  wrap.appendChild(svg);
 }
 
 // ---------- stats ----------
