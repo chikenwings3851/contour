@@ -415,6 +415,31 @@
     background:var(--surface-2);border:1px solid var(--border-strong);border-bottom-width:2px;
     border-radius:6px;padding:3px 7px;white-space:nowrap;
   }
+  #printReport{ display:none; }
+  @media print{
+    body > *:not(#printReport){ display:none!important; }
+    #printReport{ display:block!important; }
+    @page{ margin:14mm; }
+  }
+  .pr-page{ font-family:var(--font-ui); color:#161824; max-width:900px; margin:0 auto; }
+  .pr-header{ display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:2px solid #4747d6; padding-bottom:12px; margin-bottom:16px; }
+  .pr-header .pr-brand{ display:flex; align-items:center; gap:10px; }
+  .pr-header .pr-brand-mark{ width:30px; height:30px; border-radius:8px; background:linear-gradient(135deg,#6a6af5,#4747d6); display:flex; align-items:center; justify-content:center; flex:none; }
+  .pr-header h1{ font-size:19px; font-weight:800; margin:0; }
+  .pr-header .pr-meta{ font-size:11px; color:#6b7080; text-align:right; line-height:1.5; }
+  .pr-section-title{ font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#6b7080; margin:20px 0 8px; }
+  .pr-section-title:first-of-type{ margin-top:0; }
+  .pr-map-wrap{ position:relative; border-radius:10px; overflow:hidden; border:1px solid #e7e9f2; page-break-inside:avoid; }
+  .pr-map-wrap img{ display:block; width:100%; height:auto; }
+  .pr-map-wrap svg{ position:absolute; inset:0; width:100%; height:100%; }
+  #printReport .stats-grid{ page-break-inside:avoid; }
+  .pr-chart-wrap{ border:1px solid #e7e9f2; border-radius:10px; padding:10px; page-break-inside:avoid; }
+  .pr-chart-wrap svg{ display:block; width:100%; height:auto; }
+  .pr-xs-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; page-break-inside:avoid; }
+  .pr-xs-card{ border:1px solid #e7e9f2; border-radius:10px; padding:10px; }
+  .pr-xs-card .pr-xs-title{ font-size:11px; font-weight:700; margin-bottom:6px; }
+  .pr-xs-card svg{ display:block; width:100%; height:auto; }
+  .pr-footer{ margin-top:20px; padding-top:10px; border-top:1px solid #e7e9f2; font-size:9.5px; color:#9599a8; line-height:1.6; }
   .toolbar-group{display:flex;align-items:center;gap:8px;}
   .toolbar-divider{width:1px;align-self:stretch;background:var(--border-strong);margin:2px 0;}
   .layer-toggle-group{border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;gap:0;}
@@ -480,6 +505,10 @@
     </div>
   </div>
 </div>
+
+<!-- Built and populated only when "Print / Save as PDF Report" is clicked; invisible the rest of
+     the time and shown only under print media, so it never affects the normal on-screen app. -->
+<div id="printReport"></div>
 
 <div id="main">
   <div id="map"></div>
@@ -693,6 +722,12 @@
         <button id="btnExportCorridor">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 15l5-5 4 4 5-6 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Export LiDAR Corridor (GeoTIFF)
+        </button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button id="btnPrintReport" style="width:100%;justify-content:center;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9V3h12v6M6 18H4a1 1 0 01-1-1v-5a1 1 0 011-1h16a1 1 0 011 1v5a1 1 0 01-1 1h-2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><rect x="6" y="14" width="12" height="7" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          Print / Save as PDF Report
         </button>
       </div>
       <button id="btnView3D" class="primary btn-3d-large">
@@ -1847,6 +1882,184 @@ async function exportLidarCorridor(){
   }
 }
 
+// ---------- combined PDF report ----------
+// No PDF library - builds a print-styled report into a normally-hidden container, shown only
+// under print media (see the #printReport CSS), then hands off to the browser's own print dialog,
+// which every modern browser can save straight to a PDF file. Keeps the app dependency-free and
+// avoids pulling in a large client-side PDF generator for something the platform already does well.
+
+// A lightweight, non-interactive cross-section render for the report - reuses the exact same real
+// per-side daylight search (findDaylightPoint) as the live interactive panel, just without the
+// hover tooltip machinery a printed page has no use for.
+function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
+  const pad = { l: 44, r: 10, t: 10, b: 22 };
+  const valid = xsPoints.filter(p => p.elev != null);
+  if(!valid.length) return '';
+  const designElevHere = designElevAt(stationDist);
+  let realMin = Math.min(...valid.map(p=>p.elev)), realMax = Math.max(...valid.map(p=>p.elev));
+  if(designElevHere < realMin) realMin = designElevHere;
+  if(designElevHere > realMax) realMax = designElevHere;
+  const span = Math.max(realMax-realMin, 0.5);
+  const yMin = realMin - span*0.12, yMax = realMax + span*0.12;
+  const xMin = xsPoints[0].offset, xMax = xsPoints[xsPoints.length-1].offset;
+  const X = o => pad.l + (o-xMin)/(xMax-xMin)*(w-pad.l-pad.r);
+  const Y = e => pad.t + (1-(e-yMin)/(yMax-yMin))*(h-pad.t-pad.b);
+
+  let svg = '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'" xmlns="'+NS+'">';
+  for(let i=0;i<=3;i++){
+    const e = yMin+(yMax-yMin)*i/3, y = Y(e);
+    svg += '<line x1="'+pad.l+'" x2="'+(w-pad.r)+'" y1="'+y+'" y2="'+y+'" stroke="#e7e9f2" stroke-width="1"/>';
+    svg += '<text x="'+(pad.l-6)+'" y="'+(y+3)+'" text-anchor="end" font-size="8.5" font-family="JetBrains Mono, monospace" fill="#8489a0">'+elevValue(e).toFixed(1)+'</text>';
+  }
+  let d='', a='', open=false;
+  xsPoints.forEach(p => {
+    if(p.elev==null){ open=false; return; }
+    const x=X(p.offset), y=Y(p.elev);
+    if(!open){ d+='M'+x.toFixed(1)+','+y.toFixed(1)+' '; a+='M'+x.toFixed(1)+','+Y(yMin).toFixed(1)+' L'+x.toFixed(1)+','+y.toFixed(1)+' '; open=true; }
+    else { d+='L'+x.toFixed(1)+','+y.toFixed(1)+' '; a+='L'+x.toFixed(1)+','+y.toFixed(1)+' '; }
+  });
+  svg += '<path d="'+a+'" fill="rgba(91,91,240,0.12)" stroke="none"/>';
+
+  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value)||0;
+  const sideSlope = parseFloat(document.getElementById('sideSlope').value)||0;
+  const halfN = bottomWidth/2;
+  const centreGround = profilePointAtDist(stationDist);
+  if(centreGround && centreGround.elev != null){
+    const depth = Math.abs(centreGround.elev - designElevHere);
+    const isCut = centreGround.elev >= designElevHere;
+    const shapeColor = isCut ? '#e0483e' : '#0d9f6e';
+    const xsLookup = (offset) => {
+      for(let i=1;i<xsPoints.length;i++){
+        if(xsPoints[i].offset >= offset){
+          const p1=xsPoints[i-1], p2=xsPoints[i];
+          if(p1.elev==null||p2.elev==null) return null;
+          const t=(offset-p1.offset)/((p2.offset-p1.offset)||1);
+          return p1.elev+(p2.elev-p1.elev)*t;
+        }
+      }
+      return null;
+    };
+    const halfWFallback = halfN + sideSlope*depth;
+    let posPt = depth>1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, 1, xsLookup) : null;
+    let negPt = depth>1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, -1, xsLookup) : null;
+    if(!posPt) posPt = { offset: halfWFallback, elev: centreGround.elev };
+    if(!negPt) negPt = { offset: -halfWFallback, elev: centreGround.elev };
+    svg += '<path d="M'+X(negPt.offset).toFixed(1)+','+Y(negPt.elev).toFixed(1)+' L'+X(-halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' L'+X(halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' L'+X(posPt.offset).toFixed(1)+','+Y(posPt.elev).toFixed(1)+'" fill="'+shapeColor+'" fill-opacity="0.28" stroke="'+shapeColor+'" stroke-width="2"/>';
+  }
+
+  svg += '<path d="'+d+'" fill="none" stroke="#4747d6" stroke-width="2"/>';
+  svg += '<line x1="'+X(xMin)+'" x2="'+X(xMax)+'" y1="'+Y(designElevHere)+'" y2="'+Y(designElevHere)+'" stroke="#c2660a" stroke-width="1.5" stroke-dasharray="5,3"/>';
+  svg += '<line x1="'+X(0)+'" x2="'+X(0)+'" y1="'+pad.t+'" y2="'+(h-pad.b)+'" stroke="#c7cbdb" stroke-width="1" stroke-dasharray="2,2"/>';
+  svg += '<line x1="'+pad.l+'" x2="'+(w-pad.r)+'" y1="'+(h-pad.b)+'" y2="'+(h-pad.b)+'" stroke="#c7cbdb" stroke-width="1"/>';
+  svg += '</svg>';
+  return svg;
+}
+
+async function generatePdfReport(){
+  if(!profile) return;
+  const btn = document.getElementById('btnPrintReport');
+  const origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = spinnerTag() + 'Building report…';
+  try{
+    const valid = profile.filter(p => p.elev != null);
+    if(!valid.length) throw new Error('no valid elevation data to report on');
+
+    // Static aerial image of the line's extent (same export-endpoint pattern as the 3D terrain
+    // texture) with an SVG overlay of the real line drawn in the exact same UTM pixel space, since
+    // there's no server-side way to bake a vector line into that raster image request itself.
+    const centerLon = valid.reduce((s,p)=>s+p.lon,0) / valid.length;
+    const zone = utmZoneFor(centerLon);
+    const sr = 26900 + zone;
+    const epsg = 'EPSG:' + sr;
+    const utmPts = valid.map(p => { const [x,y] = proj4('WGS84', epsg, [p.lon, p.lat]); return {x,y}; });
+    const uxs = utmPts.map(p=>p.x), uys = utmPts.map(p=>p.y);
+    let xmin = Math.min(...uxs), xmax = Math.max(...uxs), ymin = Math.min(...uys), ymax = Math.max(...uys);
+    const padX = Math.max((xmax-xmin)*0.15, 25), padY = Math.max((ymax-ymin)*0.15, 25);
+    xmin -= padX; xmax += padX; ymin -= padY; ymax += padY;
+    const imgW = 860, imgH = 420;
+    const targetAspect = imgW/imgH, bboxW = xmax-xmin, bboxH = ymax-ymin;
+    if(bboxW/bboxH > targetAspect){
+      const newH = bboxW/targetAspect, cy=(ymin+ymax)/2; ymin=cy-newH/2; ymax=cy+newH/2;
+    } else {
+      const newW = bboxH*targetAspect, cx=(xmin+xmax)/2; xmin=cx-newW/2; xmax=cx+newW/2;
+    }
+    const mapImgUrl = AERIAL_URL + '/export?bbox='+xmin+','+ymin+','+xmax+','+ymax+'&bboxSR='+sr+'&imageSR='+sr+'&size='+imgW+','+imgH+'&format=jpg&f=image';
+    const toPx = (ux,uy) => ({ x:(ux-xmin)/(xmax-xmin)*imgW, y:(1-(uy-ymin)/(ymax-ymin))*imgH });
+    let linePath = '';
+    utmPts.forEach((p,i) => { const px=toPx(p.x,p.y); linePath += (i===0?'M':'L')+px.x.toFixed(1)+','+px.y.toFixed(1)+' '; });
+    const startPx = toPx(utmPts[0].x, utmPts[0].y), endPx = toPx(utmPts[utmPts.length-1].x, utmPts[utmPts.length-1].y);
+    const mapOverlaySvg = '<svg width="'+imgW+'" height="'+imgH+'" viewBox="0 0 '+imgW+' '+imgH+'" xmlns="'+NS+'">' +
+      '<path d="'+linePath+'" fill="none" stroke="#ff6a3d" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>' +
+      '<circle cx="'+startPx.x.toFixed(1)+'" cy="'+startPx.y.toFixed(1)+'" r="6" fill="#22c55e" stroke="#fff" stroke-width="2"/>' +
+      '<circle cx="'+endPx.x.toFixed(1)+'" cy="'+endPx.y.toFixed(1)+'" r="6" fill="#e0483e" stroke="#fff" stroke-width="2"/>' +
+    '</svg>';
+
+    // Cross-sections at the deepest cut and deepest fill stations - fetched fresh so the report is
+    // self-contained regardless of whether the Cross Section panel had anything open at all.
+    let xsHtml = '';
+    if(designGrade){
+      let maxCut = null, maxFill = null;
+      profile.forEach(p => {
+        if(p.elev == null) return;
+        const diff = p.elev - designElevAt(p.dist);
+        if(diff > 0 && (!maxCut || diff > maxCut.amount)) maxCut = { amount: diff, dist: p.dist };
+        if(diff < 0 && (!maxFill || -diff > maxFill.amount)) maxFill = { amount: -diff, dist: p.dist };
+      });
+      const bufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
+      const cards = [];
+      for(const entry of [['Max Cut', maxCut], ['Max Fill', maxFill]]){
+        const [label, station] = entry;
+        if(!station) continue;
+        try{
+          const xsPoints = await fetchCrossSection(station.dist, bufferM);
+          const svg = buildStaticCrossSectionSVG(xsPoints, station.dist, 400, 210);
+          if(svg) cards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+label+' — '+fmtStation(station.dist)+' ('+fmtElev(station.amount)+')</div>'+svg+'</div>');
+        } catch(e){ /* best-effort - a failed fetch here just means one fewer card, not a failed report */ }
+      }
+      if(cards.length) xsHtml = '<div class="pr-section-title">Cross-Sections at Critical Stations</div><div class="pr-xs-row">'+cards.join('')+'</div>';
+    }
+
+    const statsClone = document.getElementById('statsGrid').cloneNode(true);
+    const chartSvgEl = document.querySelector('#chartWrap svg');
+    const chartClone = chartSvgEl ? chartSvgEl.cloneNode(true) : null;
+    let cutFillHtml = '';
+    if(designGrade){
+      cutFillHtml = '<div class="pr-section-title">Design Grade — Cut / Fill</div>' + document.getElementById('cutFillStats').cloneNode(true).outerHTML;
+    }
+
+    const container = document.getElementById('printReport');
+    container.innerHTML =
+      '<div class="pr-page">' +
+        '<div class="pr-header">' +
+          '<div class="pr-brand"><div class="pr-brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M3 17l5-7 4 4 5-8 4 5" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h1>Contour — Elevation Profile Report</h1></div>' +
+          '<div class="pr-meta">' + new Date().toLocaleDateString() + '<br>Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</div>' +
+        '</div>' +
+        '<div class="pr-section-title">Location</div>' +
+        '<div class="pr-map-wrap"><img id="prMapImg" src="'+mapImgUrl+'">' + mapOverlaySvg + '</div>' +
+        '<div class="pr-section-title">Profile Summary</div>' +
+        statsClone.outerHTML +
+        '<div class="pr-section-title">Elevation Profile</div>' +
+        '<div class="pr-chart-wrap">' + (chartClone ? chartClone.outerHTML : '<p>No chart available.</p>') + '</div>' +
+        cutFillHtml +
+        xsHtml +
+        '<div class="pr-footer">Ground elevation: Ontario LiDAR DTM (Land Information Ontario), 0.5m resolution. Aerial imagery: Ontario Orthophotography (LIO). Vertical datum CGVD2013, horizontal WGS84. Generated by Contour.</div>' +
+      '</div>';
+
+    const img = document.getElementById('prMapImg');
+    if(img && !img.complete){
+      await new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; setTimeout(resolve, 4000); });
+    }
+    window.print();
+  } catch(err){
+    showToast('Report failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+  }
+}
+document.getElementById('btnPrintReport').addEventListener('click', generatePdfReport);
+
 // Fetches one sheet (max 3km) of the corridor in 2000px LERC chunks and writes it into the shared
 // full-extent grid at its correct pixel offset, exactly like MaxDrainageMap's DTM export does.
 async function fetchCorridorSheetIntoGrid(elev, gridW, gridH, gridXmin, gridYmax, PS, xmin, ymin, xmax, ymax, sr){
@@ -2687,7 +2900,14 @@ async function fetchCrossSection(stationDist, bufferM){
   const microStep = Math.min(2, stationDist, profile[profile.length-1].dist - stationDist) || 0.5;
   const back = profilePointAtDist(Math.max(0, stationDist - microStep));
   const fwd = profilePointAtDist(Math.min(profile[profile.length-1].dist, stationDist + microStep));
-  const epsg = 'EPSG:' + view3dGridInfo.sr;
+  // Derived independently from this station's own longitude - NOT from view3dGridInfo, which only
+  // exists once the 3D view has been opened at least once. This function is also called directly
+  // by the PDF report (which may run before 3D has ever been opened), so it can't assume that
+  // global state exists; deriving its own zone here matches exactly what buildCorridorGrid() does
+  // for the same line anyway, just evaluated at this specific station's longitude.
+  const zone = utmZoneFor(p.lon);
+  if(zone < 15 || zone > 18) throw new Error('this station is in UTM zone ' + zone + 'N, outside the zones set up for this (15N-18N covers all of Ontario).');
+  const epsg = 'EPSG:' + (26900 + zone);
   const [ux, uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
 
   let dx = 1, dz = 0;
