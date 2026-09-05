@@ -226,6 +226,10 @@
     box-shadow:var(--shadow-md);
   }
   .datum-note{font-size:10.5px;color:var(--text-faint);margin-top:9px;line-height:1.5;}
+  #surveyList{display:flex;flex-direction:column;gap:8px;}
+  .survey-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;}
+  .survey-project{font-size:12px;font-weight:700;color:var(--text);}
+  .survey-range{font-family:var(--font-mono);color:var(--text-dim);font-size:11px;white-space:nowrap;}
   .empty-hint{
     display:flex;
     flex-direction:column;
@@ -414,6 +418,11 @@
       <div class="datum-note" id="datumNote"></div>
     </div>
 
+    <div class="card" id="surveyCard" style="display:none;">
+      <h2>LiDAR Survey Coverage</h2>
+      <div id="surveyList"></div>
+    </div>
+
     <div class="card" id="exportCard" style="display:none;">
       <h2>Export</h2>
       <div class="row">
@@ -424,6 +433,17 @@
         <button id="btnExportPng">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="15" rx="2" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><path d="M4 16l5-4 4 3 3-3 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Save Chart PNG
+        </button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <select id="corridorWidth" title="Buffer distance either side of the line">
+          <option value="10">±10m corridor</option>
+          <option value="20" selected>±20m corridor</option>
+          <option value="50">±50m corridor</option>
+        </select>
+        <button id="btnExportCorridor">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 15l5-5 4 4 5-6 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          Export LiDAR Corridor (GeoTIFF)
         </button>
       </div>
     </div>
@@ -507,9 +527,12 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lerc@2.0.0/LercDecode.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
 'use strict';
 
+proj4.defs('EPSG:26915', '+proj=utm +zone=15 +datum=NAD83 +units=m +no_defs +type=crs');
+proj4.defs('EPSG:26916', '+proj=utm +zone=16 +datum=NAD83 +units=m +no_defs +type=crs');
 proj4.defs('EPSG:26917', '+proj=utm +zone=17 +datum=NAD83 +units=m +no_defs +type=crs');
 proj4.defs('EPSG:26918', '+proj=utm +zone=18 +datum=NAD83 +units=m +no_defs +type=crs');
 
@@ -821,6 +844,7 @@ function resetAll(){
   document.getElementById('emptyCard').style.display = '';
   document.getElementById('statsCard').style.display = 'none';
   document.getElementById('chartCard').style.display = 'none';
+  document.getElementById('surveyCard').style.display = 'none';
   document.getElementById('exportCard').style.display = 'none';
   document.getElementById('chartWrap').querySelectorAll('svg').forEach(n=>n.remove());
 }
@@ -873,7 +897,7 @@ async function fetchElevationChunk(chunkVertices, sampleCount, retries){
           const v = parseFloat(s.value);
           if(isFinite(v) && Math.abs(v) < 1e30) elev = v;
         }
-        return { lat: s.location.y, lon: s.location.x, elev };
+        return { lat: s.location.y, lon: s.location.x, elev, rasterId: s.rasterId };
       });
     } catch(err){
       if(attempt >= retries) return null; // exhausted retries — caller treats this as a data gap
@@ -931,7 +955,7 @@ async function runProfile(){
     profile = allPoints.map(s => {
       if(prev) cum += haversine(prev.lat, prev.lon, s.lat, s.lon);
       prev = s;
-      return { dist: cum, lat: s.lat, lon: s.lon, elev: s.elev };
+      return { dist: cum, lat: s.lat, lon: s.lon, elev: s.elev, rasterId: s.rasterId };
     });
 
     const validCount = profile.filter(p => p.elev != null).length;
@@ -953,6 +977,7 @@ async function runProfile(){
     renderStats(profile, length);
     refreshChart();
     document.getElementById('exportCard').style.display = '';
+    loadSurveyCoverage(profile, myRequestId); // best-effort, doesn't block the main profile
 
     const notes = [];
     if(validCount < profile.length) notes.push((profile.length - validCount) + ' gaps, no data');
@@ -963,6 +988,49 @@ async function runProfile(){
     hideProgressBar();
     statusEl.className = 'err';
     statusEl.textContent = 'Could not build profile: ' + err.message;
+  }
+}
+
+function escHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// The DTM is stitched from many separately-flown regional LiDAR projects (the service's own
+// mosaic catalog names and dates each one) - this looks up which real survey(s) the line's data
+// actually came from via the rasterId getSamples already returns, rather than a generic disclaimer.
+async function loadSurveyCoverage(prof, myRequestId){
+  const surveyCard = document.getElementById('surveyCard');
+  try{
+    const ids = [...new Set(prof.map(p => p.rasterId).filter(id => id != null))];
+    if(!ids.length){ surveyCard.style.display = 'none'; return; }
+    const params = new URLSearchParams({ where: 'OBJECTID IN (' + ids.join(',') + ')', outFields: 'OBJECTID,Project', f: 'json' });
+    const res = await fetch(DTM_URL + '/query?' + params.toString());
+    const data = await res.json();
+    if(myRequestId !== profileRequestId) return; // superseded by a newer line
+    const projectById = {};
+    (data.features || []).forEach(f => { projectById[f.attributes.OBJECTID] = f.attributes.Project || 'Unknown source'; });
+
+    const segments = [];
+    let cur = null;
+    prof.forEach(p => {
+      const proj = projectById[p.rasterId] || 'Unknown source';
+      if(!cur || cur.project !== proj){
+        if(cur) segments.push(cur);
+        cur = { project: proj, startDist: p.dist, endDist: p.dist };
+      } else {
+        cur.endDist = p.dist;
+      }
+    });
+    if(cur) segments.push(cur);
+
+    if(!segments.length){ surveyCard.style.display = 'none'; return; }
+    document.getElementById('surveyList').innerHTML = segments.map(seg =>
+      '<div class="survey-row"><div class="survey-project">' + escHtml(seg.project) + '</div>' +
+      '<div class="survey-range">' + fmtStation(seg.startDist) + ' – ' + fmtStation(seg.endDist) + '</div></div>'
+    ).join('');
+    surveyCard.style.display = '';
+  } catch(err){
+    surveyCard.style.display = 'none'; // non-critical - just omit rather than show anything wrong
   }
 }
 
@@ -1105,6 +1173,203 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
     statusEl.textContent = 'DXF import failed: ' + err.message;
   }
 });
+
+// ---------- LiDAR corridor export (GeoTIFF) ----------
+// Reuses the exact lossless GeoTIFF pipeline already proven in MaxDrainageMap (same LERC decode +
+// buildFloat32GeoTIFF binary writer, tag-for-tag GDAL-compatible) rather than re-deriving TIFF
+// writing from scratch - only the extent logic differs (a buffered corridor around a line here,
+// instead of a boundary polygon there).
+
+function utmZoneFor(lon){ return Math.floor((lon + 180) / 6) + 1; }
+
+document.getElementById('btnExportCorridor').addEventListener('click', () => exportLidarCorridor());
+
+async function exportLidarCorridor(){
+  if(!vertices.length) return;
+  const bufferM = parseFloat(document.getElementById('corridorWidth').value);
+  const centerLon = vertices.reduce((s,v) => s + v.lng, 0) / vertices.length;
+  const zone = utmZoneFor(centerLon);
+  if(zone < 15 || zone > 18){
+    statusEl.className = 'err';
+    statusEl.textContent = 'Corridor export failed: this line is in UTM zone ' + zone + 'N, outside the zones set up for this (15N-18N covers all of Ontario).';
+    return;
+  }
+  const sr = 26900 + zone;
+  const epsg = 'EPSG:' + sr;
+
+  const utmPts = vertices.map(v => proj4('WGS84', epsg, [v.lng, v.lat]));
+  let xmin=Infinity, xmax=-Infinity, ymin=Infinity, ymax=-Infinity;
+  utmPts.forEach(([x,y]) => {
+    xmin = Math.min(xmin, x-bufferM); xmax = Math.max(xmax, x+bufferM);
+    ymin = Math.min(ymin, y-bufferM); ymax = Math.max(ymax, y+bufferM);
+  });
+  const PS = 0.5;
+  xmin = Math.floor(xmin/PS)*PS; xmax = Math.ceil(xmax/PS)*PS;
+  ymin = Math.floor(ymin/PS)*PS; ymax = Math.ceil(ymax/PS)*PS;
+  const wM = xmax-xmin, hM = ymax-ymin;
+
+  const SHEET = 3000, MAX_SHEETS = 16;
+  const nSX = Math.ceil(wM/SHEET), nSY = Math.ceil(hM/SHEET), total = nSX*nSY;
+  if(total > MAX_SHEETS){
+    statusEl.className = 'err';
+    statusEl.textContent = 'Corridor export failed: this would need ' + total + ' sheets (max ' + MAX_SHEETS + ', about 12×12km) — try a narrower corridor width or a shorter line.';
+    return;
+  }
+  if(typeof Lerc === 'undefined'){
+    statusEl.className = 'err';
+    statusEl.textContent = 'Corridor export failed: the LERC decoder did not load (check your connection and reload).';
+    return;
+  }
+
+  const W = Math.round(wM/PS), H = Math.round(hM/PS);
+  const elev = new Float32Array(W*H); elev.fill(-9999);
+  let anyValid = false;
+
+  statusEl.className = '';
+  showProgressBar();
+  try{
+    let sheetNo = 0;
+    for(let sy=0; sy<nSY; sy++){
+      for(let sx=0; sx<nSX; sx++){
+        sheetNo++;
+        const sx0 = xmin+sx*SHEET, sx1 = Math.min(xmax, sx0+SHEET);
+        const sy1 = ymax-sy*SHEET, sy0 = Math.max(ymin, sy1-SHEET);
+        statusEl.innerHTML = 'Exporting LiDAR corridor — sheet ' + sheetNo + ' of ' + total + '…';
+        const ok = await fetchCorridorSheetIntoGrid(elev, W, H, xmin, ymax, PS, sx0, sy0, sx1, sy1, sr);
+        if(ok) anyValid = true;
+        setProgressBar(sheetNo, total);
+      }
+    }
+    hideProgressBar();
+    if(!anyValid){
+      statusEl.className = 'err';
+      statusEl.textContent = 'Corridor export failed: no LiDAR coverage found in this corridor.';
+      return;
+    }
+    const buf = buildFloat32GeoTIFF(elev, W, H, PS, PS, xmin, ymax, sr);
+    const blob = new Blob([buf], { type: 'image/tiff' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'contour-corridor-' + Math.round(bufferM*2) + 'm-UTM' + zone + 'N-' + Date.now() + '.tif';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    statusEl.innerHTML = 'Corridor DTM exported — ' + W + '×' + H + 'px @ 0.5m native, UTM ' + zone + 'N (NAD83).';
+  } catch(err){
+    hideProgressBar();
+    statusEl.className = 'err';
+    statusEl.textContent = 'Corridor export failed: ' + err.message;
+  }
+}
+
+// Fetches one sheet (max 3km) of the corridor in 2000px LERC chunks and writes it into the shared
+// full-extent grid at its correct pixel offset, exactly like MaxDrainageMap's DTM export does.
+async function fetchCorridorSheetIntoGrid(elev, gridW, gridH, gridXmin, gridYmax, PS, xmin, ymin, xmax, ymax, sr){
+  const W = Math.round((xmax-xmin)/PS), H = Math.round((ymax-ymin)/PS);
+  if(W < 2 || H < 2) return false;
+  const goX = Math.round((xmin-gridXmin)/PS);
+  const goY = Math.round((gridYmax-ymax)/PS);
+  const CHUNK = 2000;
+  const nCX = Math.ceil(W/CHUNK), nCY = Math.ceil(H/CHUNK);
+  let valid = 0;
+  for(let cy=0; cy<nCY; cy++){
+    for(let cx=0; cx<nCX; cx++){
+      const px0 = cx*CHUNK, py0 = cy*CHUNK;
+      const cw = Math.min(CHUNK, W-px0), ch = Math.min(CHUNK, H-py0);
+      const bx0 = xmin+px0*PS, bx1 = bx0+cw*PS;
+      const by1 = ymax-py0*PS, by0 = by1-ch*PS;
+      const url = DTM_URL + '/exportImage?bbox=' + bx0 + ',' + by0 + ',' + bx1 + ',' + by1 +
+                  '&bboxSR=' + sr + '&imageSR=' + sr + '&size=' + cw + ',' + ch +
+                  '&format=lerc&interpolation=RSP_NearestNeighbor&f=image';
+      const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      const ab = await resp.arrayBuffer();
+      const dec = Lerc.decode(ab);
+      const px = dec.pixels[0], mask = dec.maskData || dec.mask;
+      for(let r=0; r<dec.height; r++){
+        const dstRow = goY+py0+r; if(dstRow >= gridH) break;
+        for(let c=0; c<dec.width; c++){
+          const dstCol = goX+px0+c; if(dstCol >= gridW) break;
+          const i = r*dec.width+c;
+          if(mask && !mask[i]) continue;
+          elev[dstRow*gridW+dstCol] = px[i]; valid++;
+        }
+      }
+    }
+  }
+  return valid > 0;
+}
+
+// Single-band float32 GeoTIFF, ported verbatim from MaxDrainageMap's already-proven writer
+// (tag-for-tag identical to GDAL output: strip layout, GeoKeys incl. linear units + citations,
+// GDAL_NODATA) rather than re-deriving TIFF binary structure from scratch.
+function buildFloat32GeoTIFF(elev,W,H,psx,psy,ulX,ulY,epsg){
+  const zone=epsg-26900;
+  const NODATA_STR='-9999\0';
+  const citation=`NAD83 / UTM zone ${zone}N|NAD83|\0`;
+  const gtCitLen=(`NAD83 / UTM zone ${zone}N|`).length;
+  const geogCitLen='NAD83|'.length;
+
+  const bytesPerRow=W*4;
+  const rowsPerStrip=Math.max(1,Math.floor(8192/bytesPerRow))||1;
+  const nStrips=Math.ceil(H/rowsPerStrip);
+
+  const N_IFD=16, ifdPos=8, ifdSize=2+N_IFD*12+4;
+  let off=ifdPos+ifdSize;
+  const even=x=>x%2?x+1:x;
+  const soOff=off;               off=even(off+4*nStrips);
+  const sbOff=off;               off=even(off+4*nStrips);
+  const mpsOff=off;              off=even(off+24);
+  const mtpOff=off;              off=even(off+48);
+  const gkdOff=off;              off=even(off+64);
+  const ascOff=off;              off=even(off+citation.length);
+  const ndOff=off;               off=even(off+NODATA_STR.length);
+  const imgOff=off;
+  const imgBytes=W*H*4;
+  const buf=new ArrayBuffer(imgOff+imgBytes);
+  const dv=new DataView(buf);
+  dv.setUint8(0,0x49);dv.setUint8(1,0x49);dv.setUint16(2,42,true);dv.setUint32(4,ifdPos,true);
+  let p=ifdPos; dv.setUint16(p,N_IFD,true); p+=2;
+  const Ef=(tag,type,count,val)=>{dv.setUint16(p,tag,true);dv.setUint16(p+2,type,true);dv.setUint32(p+4,count,true);dv.setUint32(p+8,val,true);p+=12;};
+  Ef(256,3,1,W);
+  Ef(257,3,1,H);
+  Ef(258,3,1,32);
+  Ef(259,3,1,1);
+  Ef(262,3,1,1);
+  Ef(273,4,nStrips,nStrips===1?imgOff:soOff);
+  Ef(277,3,1,1);
+  Ef(278,3,1,rowsPerStrip);
+  Ef(279,4,nStrips,nStrips===1?imgBytes:sbOff);
+  Ef(284,3,1,1);
+  Ef(339,3,1,3);
+  Ef(33550,12,3,mpsOff);
+  Ef(33922,12,6,mtpOff);
+  Ef(34735,3,32,gkdOff);
+  Ef(34737,2,citation.length,ascOff);
+  Ef(42113,2,NODATA_STR.length,ndOff);
+  dv.setUint32(p,0,true);
+  for(let s=0;s<nStrips;s++){
+    const rows=Math.min(rowsPerStrip,H-s*rowsPerStrip);
+    dv.setUint32(soOff+s*4, imgOff+s*rowsPerStrip*bytesPerRow, true);
+    dv.setUint32(sbOff+s*4, rows*bytesPerRow, true);
+  }
+  dv.setFloat64(mpsOff,psx,true);dv.setFloat64(mpsOff+8,psy,true);dv.setFloat64(mpsOff+16,0,true);
+  dv.setFloat64(mtpOff,0,true);dv.setFloat64(mtpOff+8,0,true);dv.setFloat64(mtpOff+16,0,true);
+  dv.setFloat64(mtpOff+24,ulX,true);dv.setFloat64(mtpOff+32,ulY,true);dv.setFloat64(mtpOff+40,0,true);
+  const gks=[1,1,0,7,
+    1024,0,1,1,
+    1025,0,1,1,
+    1026,34737,gtCitLen,0,
+    2049,34737,geogCitLen,gtCitLen,
+    2054,0,1,9102,
+    3072,0,1,epsg,
+    3076,0,1,9001];
+  gks.forEach((v,i)=>dv.setUint16(gkdOff+i*2,v,true));
+  for(let i=0;i<citation.length;i++) dv.setUint8(ascOff+i,citation.charCodeAt(i));
+  for(let i=0;i<NODATA_STR.length;i++) dv.setUint8(ndOff+i,NODATA_STR.charCodeAt(i));
+  const out=new DataView(buf,imgOff);
+  for(let i=0;i<elev.length;i++) out.setFloat32(i*4,elev[i],true);
+  return buf;
+}
 
 // ---------- stats ----------
 
