@@ -404,7 +404,8 @@
   }
   .modal-head h3{margin:0;font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px;}
   .modal-head-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-  .view3d-panel{width:min(1200px,94vw);max-height:90vh;}
+  .view3d-panel{width:min(1200px,94vw);max-height:90vh;top:56px;left:56px;display:flex;flex-direction:column;}
+  .view3d-panel > .modal-head, .view3d-panel > .datum-note{flex:none;}
   .shortcuts-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);}
   .shortcuts-head h3{margin:0;font-size:15px;font-weight:800;}
   .shortcuts-list{display:flex;flex-direction:column;gap:12px;}
@@ -445,7 +446,7 @@
   .layer-toggle-group button{border:none;border-radius:0;padding:7px 9px;}
   .layer-toggle-group button+button{border-left:1px solid var(--border-strong);}
   #view3dWrap{
-    position:relative;width:100%;height:min(70vh,780px);
+    position:relative;width:100%;height:min(70vh,780px);flex:1 1 auto;min-height:200px;
     background:#0e1420;border-radius:10px;overflow:hidden;
   }
   #view3dCanvas{display:block;width:100%;height:100%;}
@@ -455,7 +456,7 @@
     background:#0e1420;z-index:2;
   }
   #view3dStatus.hidden{display:none;}
-  .xs-panel{width:min(700px,92vw);}
+  .xs-panel{width:min(700px,92vw);top:100px;left:96px;}
   #xsStatus{font-size:12.5px;color:var(--text-dim);margin-bottom:10px;}
   #xsStatus.err{color:var(--danger);}
   #xsChartWrap{
@@ -2316,12 +2317,15 @@ function closeView3D(){
   view3dOpen = false;
   document.getElementById('view3dModal').style.display = 'none';
   if(view3dAnimFrame) cancelAnimationFrame(view3dAnimFrame);
+  layoutPanels();
 }
 
 async function openView3D(){
   if(!vertices.length) return;
   view3dOpen = true;
   document.getElementById('view3dModal').style.display = 'block';
+  bringToFront(document.querySelector('.view3d-panel'));
+  layoutPanels();
   const statusDiv = document.getElementById('view3dStatus');
   statusDiv.classList.remove('hidden');
   statusDiv.innerHTML = spinnerTag() + 'Building 3D terrain — fetching full-resolution LiDAR…';
@@ -2867,6 +2871,7 @@ function closeCrossSectionModal(){
   document.getElementById('xsModal').style.display = 'none';
   xsCurrentStationDist = null;
   updateXsHighlight();
+  layoutPanels();
 }
 
 // Marks, on both the map and the main elevation chart, exactly which station the Cross Section
@@ -2892,6 +2897,8 @@ function openCrossSectionModal(){
   if(!view3dGridInfo || !profile || profile.length < 2) return;
   xsOpen = true;
   document.getElementById('xsModal').style.display = 'block';
+  bringToFront(document.querySelector('.xs-panel'));
+  layoutPanels();
   const totalLen = profile[profile.length-1].dist;
   const interval = niceGridSpacing(totalLen, 15);
   xsStations = [];
@@ -4079,7 +4086,10 @@ window.addEventListener('resize', () => {
 let modalOpen = false;
 document.getElementById('btnExpandChart').addEventListener('click', () => {
   modalOpen = true;
+  const panel = document.querySelector('#chartModal .modal-panel');
   document.getElementById('chartModal').style.display = 'block';
+  bringToFront(panel);
+  layoutPanels();
   refreshChart();
 });
 document.getElementById('btnCloseModal').addEventListener('click', closeModal);
@@ -4095,6 +4105,7 @@ document.addEventListener('keydown', (e) => {
 function closeModal(){
   modalOpen = false;
   document.getElementById('chartModal').style.display = 'none';
+  layoutPanels();
 }
 
 // The expanded panel floats over the map (no blocking backdrop) so the drawn line stays
@@ -4110,11 +4121,27 @@ function closeModal(){
 // small threshold - a plain click (down+up with no real movement) on a button or select still
 // reaches it untouched, since nothing here calls preventDefault or updates panel position unless
 // dragging actually engaged.
+// The Elevation Profile, 3D Terrain, and Cross Section panels can all be open at once, each its
+// own independent floating window - this tracks which was interacted with most recently so it
+// renders above the other two instead of getting stuck underneath (they all share overlapping
+// default screen positions and the 3D panel in particular is nearly fullscreen).
+let topPanelZ = 1001;
+function bringToFront(panel){
+  // Each panel's own .modal-overlay wrapper (not the inner .modal-panel) is what carries the
+  // fixed z-index that creates its stacking context, so that's what has to move - bumping the
+  // inner panel's z-index only reorders within its own already-isolated stacking context and has
+  // no effect against the other two overlays.
+  const overlay = panel.closest('.modal-overlay') || panel;
+  overlay.style.zIndex = ++topPanelZ;
+}
+
 function makeDraggable(panel, handle){
   const THRESHOLD = 4;
   let armed = false, dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+  panel.addEventListener('mousedown', () => bringToFront(panel));
   handle.addEventListener('mousedown', (e) => {
     if(e.button !== 0) return;
+    bringToFront(panel);
     armed = true; dragging = false;
     const rect = panel.getBoundingClientRect();
     startX = e.clientX; startY = e.clientY;
@@ -4140,6 +4167,64 @@ function makeDraggable(panel, handle){
   document.addEventListener('mouseup', () => { armed = false; dragging = false; });
 }
 makeDraggable(document.querySelector('#chartModal .modal-panel'), document.getElementById('modalDragHandle'));
+
+// ---------- floating panel tiling ----------
+// Elevation Profile (expand), 3D Terrain, and Cross Section - a future Grade Editor panel would
+// join the same list - can all be open together. Rather than leave them at their overlapping CSS
+// default positions, the open set is re-tiled into a non-overlapping split-screen layout every
+// time a panel opens, closes, or the window resizes. 3D Terrain gets the wide primary slot when
+// it's open (it's the one that actually benefits from real screen space); everything else stacks
+// evenly down the remaining column, in the order listed here. Dragging (makeDraggable, above)
+// still works on top of this afterward for manual fine-tuning - it only ever touches left/top, so
+// a drag doesn't fight the width/height a tile layout just set. Re-tiling only overwrites position
+// when the open SET changes, so a manual drag persists until then.
+const TILE_MARGIN = 16, TILE_GAP = 14;
+function getTilePanels(){
+  const list = [
+    { key:'view3d', el: document.querySelector('.view3d-panel'), open: () => view3dOpen },
+    { key:'chart',  el: document.querySelector('#chartModal .modal-panel'), open: () => modalOpen },
+    { key:'xs',     el: document.querySelector('.xs-panel'), open: () => xsOpen }
+  ];
+  return list.filter(p => p.open());
+}
+function layoutPanels(){
+  const panels = getTilePanels();
+  if(!panels.length) return;
+  const areaX = TILE_MARGIN, areaY = TILE_MARGIN;
+  const areaW = window.innerWidth - TILE_MARGIN*2;
+  const areaH = window.innerHeight - TILE_MARGIN*2;
+  function place(el, x, y, w, h){
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.style.right = 'auto';
+    el.style.width = w + 'px';
+    el.style.height = h + 'px';
+    el.style.maxHeight = h + 'px';
+  }
+  if(panels.length === 1){
+    place(panels[0].el, areaX, areaY, areaW, areaH);
+    return;
+  }
+  // First panel in the (priority-ordered) open list takes a wide primary column; the rest split
+  // the remaining column evenly by height. With just two panels open this degenerates to a clean
+  // side-by-side split, which is exactly what's wanted there too.
+  const primaryW = Math.round(areaW * 0.58);
+  const secondaryW = areaW - primaryW - TILE_GAP;
+  place(panels[0].el, areaX, areaY, primaryW, areaH);
+  const rest = panels.slice(1);
+  const secX = areaX + primaryW + TILE_GAP;
+  const eachH = (areaH - TILE_GAP * (rest.length - 1)) / rest.length;
+  rest.forEach((p, i) => {
+    const y = Math.round(areaY + i * (eachH + TILE_GAP));
+    place(p.el, secX, y, secondaryW, Math.round(eachH));
+  });
+  // Placing panels above only changes CSS position/size - the Three.js renderer keeps its old
+  // resolution/aspect ratio until told to remeasure, so a later panel open/close that shrinks or
+  // grows the 3D panel (not just its own initial open) needs to explicitly re-fit it or the scene
+  // renders stretched to the new box instead of correctly reframed.
+  if(panels.some(p => p.key === 'view3d')) resizeView3D();
+}
+window.addEventListener('resize', () => { if(getTilePanels().length) layoutPanels(); });
 
 // ---------- export ----------
 
