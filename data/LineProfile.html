@@ -339,7 +339,6 @@
   }
   .gc-badge.rise{color:var(--accent-dark);}
   .gc-badge.fall{color:var(--success);}
-  .gc-badge.gc-warn{color:#b45309;background:#fef3e2;border-color:#fbd38d;font-weight:700;}
   #surveyList{display:flex;flex-direction:column;gap:8px;}
   .survey-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;}
   .survey-project{font-size:12px;font-weight:700;color:var(--text);}
@@ -522,11 +521,11 @@
         <div id="searchResults" class="search-results" hidden></div>
       </div>
       <div class="basemap-toggle">
-        <button id="btnBaseStreet" class="ghost-active">
+        <button id="btnBaseStreet">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 20l-6-2V4l6 2m0 14l6-2m-6 2V6m6 12l6 2V6l-6-2m0 16V4m0 2L9 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Map
         </button>
-        <button id="btnBaseAerial">
+        <button id="btnBaseAerial" class="ghost-active">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M3 15l5-5 4 4 5-6 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Aerial
         </button>
@@ -670,22 +669,6 @@
           <div class="gp-field">
             <label>Side Slope (H:1V)</label>
             <input type="number" id="sideSlope" step="0.1" min="0" value="2">
-          </div>
-        </div>
-        <div class="row" style="margin-top:8px;">
-          <div class="gp-field">
-            <label>Manning's n</label>
-            <input type="number" id="manningN" step="0.001" min="0.001" value="0.030" title="Roughness coefficient - 0.030 is a common default for an earth-lined channel">
-          </div>
-          <div class="gp-field">
-            <label>Min. Slope (%)</label>
-            <input type="number" id="minSlopePct" step="0.05" min="0" value="0.5" title="Grade segments flatter than this are flagged - flat drains don't self-clean">
-          </div>
-        </div>
-        <div class="row" style="margin-top:8px;">
-          <div class="gp-field">
-            <label>Freeboard (m)</label>
-            <input type="number" id="freeboard" step="0.05" min="0" value="0.15" title="Margin kept clear at the top of the channel - the design flow depth (and its capacity check) is the total depth minus this">
           </div>
         </div>
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
@@ -1039,13 +1022,13 @@ const map = L.map('map', { zoomControl: true, doubleClickZoom: true }).setView([
 const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap contributors'
-}).addTo(map);
+});
 
 // Same Ontario orthophoto source (SWOOP/COOP via LIO) used in MaxDrainageMap.
 const aerialLayer = L.tileLayer(AERIAL_URL + '/tile/{z}/{y}/{x}', {
   maxZoom: 19,
   attribution: 'Ontario Imagery (LIO)'
-});
+}).addTo(map);
 
 document.getElementById('btnBaseStreet').addEventListener('click', () => {
   map.removeLayer(aerialLayer);
@@ -1731,9 +1714,6 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     designGrade,
     bottomWidth: parseFloat(document.getElementById('bottomWidth').value) || 1,
     sideSlope: parseFloat(document.getElementById('sideSlope').value) || 2,
-    manningN: parseFloat(document.getElementById('manningN').value) || 0.03,
-    minSlopePct: parseFloat(document.getElementById('minSlopePct').value) || 0.5,
-    freeboard: parseFloat(document.getElementById('freeboard').value) || 0.15,
     unitSystem,
     veMode,
     mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() }
@@ -1769,9 +1749,6 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
 
     if(data.bottomWidth != null) document.getElementById('bottomWidth').value = data.bottomWidth;
     if(data.sideSlope != null) document.getElementById('sideSlope').value = data.sideSlope;
-    if(data.manningN != null) document.getElementById('manningN').value = data.manningN;
-    if(data.minSlopePct != null) document.getElementById('minSlopePct').value = data.minSlopePct;
-    if(data.freeboard != null) document.getElementById('freeboard').value = data.freeboard;
     unitSystem = data.unitSystem === 'imperial' ? 'imperial' : 'metric';
     document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === unitSystem));
     veMode = data.veMode || 'auto';
@@ -1891,6 +1868,38 @@ async function exportLidarCorridor(){
 // A lightweight, non-interactive cross-section render for the report - reuses the exact same real
 // per-side daylight search (findDaylightPoint) as the live interactive panel, just without the
 // hover tooltip machinery a printed page has no use for.
+// Pure daylight-search/template math shared by the live Cross Section chart (renderCrossSectionChart,
+// which draws it as DOM SVG nodes) and the print report's static twin (buildStaticCrossSectionSVG,
+// which draws it as an SVG string) - keeping this one place means a future fix to the search/template
+// logic can't silently apply to one renderer and not the other.
+function computeChannelTemplate(stationDist, xsPoints){
+  const centreGround = profilePointAtDist(stationDist);
+  if(!centreGround || centreGround.elev == null) return null;
+  const designElevHere = designElevAt(stationDist);
+  const depth = Math.abs(centreGround.elev - designElevHere);
+  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
+  const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+  const halfN = bottomWidth / 2;
+  const isCut = centreGround.elev >= designElevHere;
+  const xsLookup = (offset) => {
+    for(let i=1;i<xsPoints.length;i++){
+      if(xsPoints[i].offset >= offset){
+        const p1 = xsPoints[i-1], p2 = xsPoints[i];
+        if(p1.elev == null || p2.elev == null) return null;
+        const t = (offset-p1.offset) / ((p2.offset-p1.offset) || 1);
+        return p1.elev + (p2.elev-p1.elev)*t;
+      }
+    }
+    return null;
+  };
+  const halfWFallback = halfN + sideSlope*depth;
+  let posPt = depth > 1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, 1, xsLookup) : null;
+  let negPt = depth > 1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, -1, xsLookup) : null;
+  if(!posPt) posPt = { offset: halfWFallback, elev: centreGround.elev };
+  if(!negPt) negPt = { offset: -halfWFallback, elev: centreGround.elev };
+  return { designElevHere, depth, bottomWidth, sideSlope, halfN, isCut, posPt, negPt, shapeColor: isCut ? '#e0483e' : '#0d9f6e' };
+}
+
 function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
   const pad = { l: 44, r: 10, t: 10, b: 22 };
   const valid = xsPoints.filter(p => p.elev != null);
@@ -1920,30 +1929,9 @@ function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
   });
   svg += '<path d="'+a+'" fill="rgba(91,91,240,0.12)" stroke="none"/>';
 
-  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value)||0;
-  const sideSlope = parseFloat(document.getElementById('sideSlope').value)||0;
-  const halfN = bottomWidth/2;
-  const centreGround = profilePointAtDist(stationDist);
-  if(centreGround && centreGround.elev != null){
-    const depth = Math.abs(centreGround.elev - designElevHere);
-    const isCut = centreGround.elev >= designElevHere;
-    const shapeColor = isCut ? '#e0483e' : '#0d9f6e';
-    const xsLookup = (offset) => {
-      for(let i=1;i<xsPoints.length;i++){
-        if(xsPoints[i].offset >= offset){
-          const p1=xsPoints[i-1], p2=xsPoints[i];
-          if(p1.elev==null||p2.elev==null) return null;
-          const t=(offset-p1.offset)/((p2.offset-p1.offset)||1);
-          return p1.elev+(p2.elev-p1.elev)*t;
-        }
-      }
-      return null;
-    };
-    const halfWFallback = halfN + sideSlope*depth;
-    let posPt = depth>1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, 1, xsLookup) : null;
-    let negPt = depth>1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, -1, xsLookup) : null;
-    if(!posPt) posPt = { offset: halfWFallback, elev: centreGround.elev };
-    if(!negPt) negPt = { offset: -halfWFallback, elev: centreGround.elev };
+  const tmpl = computeChannelTemplate(stationDist, xsPoints);
+  if(tmpl){
+    const { halfN, posPt, negPt, shapeColor } = tmpl;
     svg += '<path d="M'+X(negPt.offset).toFixed(1)+','+Y(negPt.elev).toFixed(1)+' L'+X(-halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' L'+X(halfN).toFixed(1)+','+Y(designElevHere).toFixed(1)+' L'+X(posPt.offset).toFixed(1)+','+Y(posPt.elev).toFixed(1)+'" fill="'+shapeColor+'" fill-opacity="0.28" stroke="'+shapeColor+'" stroke-width="2"/>';
   }
 
@@ -1953,6 +1941,32 @@ function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
   svg += '<line x1="'+pad.l+'" x2="'+(w-pad.r)+'" y1="'+(h-pad.b)+'" y2="'+(h-pad.b)+'" stroke="#c7cbdb" stroke-width="1"/>';
   svg += '</svg>';
   return svg;
+}
+
+// Renames every id="..." inside a cloned SVG (and any fill/stroke/filter/clip-path/mask attribute
+// referencing url(#id)) by appending suffix, so a print-report clone of a live chart never shares an
+// id with its source - without this, the clone's <linearGradient>/<filter> defs would collide with the
+// live chart's and url(#id) lookups (first-match-in-document-order, same as getElementById) would start
+// resolving to whichever copy sits first in the DOM.
+function localizeClonedSvgIds(svgEl, suffix){
+  const idMap = new Map();
+  const idEls = svgEl.hasAttribute('id') ? [svgEl, ...svgEl.querySelectorAll('[id]')] : [...svgEl.querySelectorAll('[id]')];
+  idEls.forEach(el => {
+    const oldId = el.getAttribute('id');
+    const newId = oldId + suffix;
+    idMap.set(oldId, newId);
+    el.setAttribute('id', newId);
+  });
+  if(!idMap.size) return;
+  svgEl.querySelectorAll('*').forEach(el => {
+    ['fill','stroke','filter','clip-path','mask'].forEach(attr => {
+      const val = el.getAttribute(attr);
+      if(!val) return;
+      idMap.forEach((newId, oldId) => {
+        if(val.includes('url(#'+oldId+')')) el.setAttribute(attr, val.split('url(#'+oldId+')').join('url(#'+newId+')'));
+      });
+    });
+  });
 }
 
 async function generatePdfReport(){
@@ -1970,6 +1984,7 @@ async function generatePdfReport(){
     // there's no server-side way to bake a vector line into that raster image request itself.
     const centerLon = valid.reduce((s,p)=>s+p.lon,0) / valid.length;
     const zone = utmZoneFor(centerLon);
+    if(zone < 15 || zone > 18) throw new Error('this line is in UTM zone ' + zone + 'N, outside the zones set up for this (15N-18N covers all of Ontario).');
     const sr = 26900 + zone;
     const epsg = 'EPSG:' + sr;
     const utmPts = valid.map(p => { const [x,y] = proj4('WGS84', epsg, [p.lon, p.lat]); return {x,y}; });
@@ -1999,33 +2014,36 @@ async function generatePdfReport(){
     // self-contained regardless of whether the Cross Section panel had anything open at all.
     let xsHtml = '';
     if(designGrade){
-      let maxCut = null, maxFill = null;
-      profile.forEach(p => {
-        if(p.elev == null) return;
-        const diff = p.elev - designElevAt(p.dist);
-        if(diff > 0 && (!maxCut || diff > maxCut.amount)) maxCut = { amount: diff, dist: p.dist };
-        if(diff < 0 && (!maxFill || -diff > maxFill.amount)) maxFill = { amount: -diff, dist: p.dist };
-      });
+      const { maxCut, maxFill } = computeCutFillStats();
       const bufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
+      const entries = [['Max Cut', maxCut], ['Max Fill', maxFill]].filter(([, station]) => station);
+      const settled = await Promise.allSettled(entries.map(([label, station]) =>
+        fetchCrossSection(station.dist, bufferM).then(xsPoints => ({ label, station, xsPoints }))
+      ));
       const cards = [];
-      for(const entry of [['Max Cut', maxCut], ['Max Fill', maxFill]]){
-        const [label, station] = entry;
-        if(!station) continue;
-        try{
-          const xsPoints = await fetchCrossSection(station.dist, bufferM);
-          const svg = buildStaticCrossSectionSVG(xsPoints, station.dist, 400, 210);
-          if(svg) cards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+label+' — '+fmtStation(station.dist)+' ('+fmtElev(station.amount)+')</div>'+svg+'</div>');
-        } catch(e){ /* best-effort - a failed fetch here just means one fewer card, not a failed report */ }
-      }
+      settled.forEach(r => {
+        if(r.status !== 'fulfilled') return; // best-effort - a failed fetch here just means one fewer card, not a failed report
+        const { label, station, xsPoints } = r.value;
+        const svg = buildStaticCrossSectionSVG(xsPoints, station.dist, 400, 210);
+        if(svg) cards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+label+' — '+fmtStation(station.dist)+' ('+fmtElev(station.amount)+')</div>'+svg+'</div>');
+      });
       if(cards.length) xsHtml = '<div class="pr-section-title">Cross-Sections at Critical Stations</div><div class="pr-xs-row">'+cards.join('')+'</div>';
     }
 
+    // Clones keep their source id attributes, which would collide with the live #statsGrid/#cutFillStats/
+    // chart svg once inserted into #printReport (which sits before #main in the document) - getElementById
+    // and url(#id) both resolve to the first match in document order, so an un-stripped clone would silently
+    // steal every future lookup of the live element for the rest of the session.
     const statsClone = document.getElementById('statsGrid').cloneNode(true);
+    statsClone.removeAttribute('id');
     const chartSvgEl = document.querySelector('#chartWrap svg');
     const chartClone = chartSvgEl ? chartSvgEl.cloneNode(true) : null;
+    if(chartClone) localizeClonedSvgIds(chartClone, '-print');
     let cutFillHtml = '';
     if(designGrade){
-      cutFillHtml = '<div class="pr-section-title">Design Grade — Cut / Fill</div>' + document.getElementById('cutFillStats').cloneNode(true).outerHTML;
+      const cutFillClone = document.getElementById('cutFillStats').cloneNode(true);
+      cutFillClone.removeAttribute('id');
+      cutFillHtml = '<div class="pr-section-title">Design Grade — Cut / Fill</div>' + cutFillClone.outerHTML;
     }
 
     const container = document.getElementById('printReport');
@@ -2965,32 +2983,6 @@ async function loadCrossSection(stationDist){
         const areaVal = unitSystem === 'imperial' ? xsAreaResult.area * (M_TO_FT*M_TO_FT) : xsAreaResult.area;
         text += ' · ' + xsAreaResult.kind + ' area ' + areaVal.toFixed(2) + ' ' + areaUnit;
       }
-      // Manning's capacity only makes physical sense for a cut (an actual conveyance channel) -
-      // a fill embankment isn't carrying water, so skip the hydraulic check there. Uses the
-      // DESIGNED template shape (bottomWidth/sideSlope), the textbook-correct input for a
-      // capacity check, not the real per-side daylight geometry the drawn shape uses.
-      if(diff != null && xsAreaResult && xsAreaResult.kind === 'cut'){
-        const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
-        const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
-        const n = parseFloat(document.getElementById('manningN').value) || 0.03;
-        const freeboard = parseFloat(document.getElementById('freeboard').value) || 0;
-        const totalDepth = Math.abs(diff);
-        const flowDepth = Math.max(0, totalDepth - freeboard);
-        const slopeFrac = Math.abs(designSlopeAt(stationDist));
-        const cap = manningCapacity(flowDepth, bottomWidth, sideSlope, n, slopeFrac);
-        if(cap){
-          const qVal = unitSystem === 'imperial' ? cap.Q * 35.3147 : cap.Q;
-          const vVal = unitSystem === 'imperial' ? cap.V * M_TO_FT : cap.V;
-          const qUnit = unitSystem === 'imperial' ? 'ft³/s' : 'm³/s';
-          const vUnit = unitSystem === 'imperial' ? 'ft/s' : 'm/s';
-          text += ' · capacity Q=' + qVal.toFixed(2) + ' ' + qUnit + ' @ V=' + vVal.toFixed(2) + ' ' + vUnit +
-            ' (n=' + n.toFixed(3) + ', ' + fmtElev(freeboard) + ' freeboard)';
-        } else if(slopeFrac <= 1e-6){
-          text += ' · capacity n/a (flat/adverse grade here)';
-        } else if(flowDepth <= 0){
-          text += ' · capacity n/a (freeboard exceeds the available depth here)';
-        }
-      }
     }
     statusDiv.textContent = text;
   } catch(err){
@@ -3070,32 +3062,9 @@ function renderCrossSectionChart(xsPoints, stationDist){
   // (xsPoints) - true accuracy, not the flat-at-centreline shortcut, since this view already has
   // real ground data on both sides fetched anyway.
   if(designGrade && stationDist != null){
-    const centreGround = profilePointAtDist(stationDist);
-    if(centreGround && centreGround.elev != null){
-      const designElevHere = designElevAt(stationDist);
-      const depth = Math.abs(centreGround.elev - designElevHere);
-      const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
-      const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
-      const halfN = bottomWidth / 2;
-      const isCut = centreGround.elev >= designElevHere;
-      const shapeColor = isCut ? '#e0483e' : '#0d9f6e'; // matches the 2D profile's cut/fill bands and the 3D channel
-
-      const xsLookup = (offset) => {
-        for(let i=1;i<xsPoints.length;i++){
-          if(xsPoints[i].offset >= offset){
-            const p1 = xsPoints[i-1], p2 = xsPoints[i];
-            if(p1.elev == null || p2.elev == null) return null;
-            const t = (offset-p1.offset) / ((p2.offset-p1.offset) || 1);
-            return p1.elev + (p2.elev-p1.elev)*t;
-          }
-        }
-        return null;
-      };
-      const halfWFallback = halfN + sideSlope*depth;
-      let posPt = depth > 1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, 1, xsLookup) : null;
-      let negPt = depth > 1e-6 ? findDaylightPoint(designElevHere, halfN, sideSlope, isCut, -1, xsLookup) : null;
-      if(!posPt) posPt = { offset: halfWFallback, elev: centreGround.elev };
-      if(!negPt) negPt = { offset: -halfWFallback, elev: centreGround.elev };
+    const tmpl = computeChannelTemplate(stationDist, xsPoints);
+    if(tmpl){
+      const { designElevHere, halfN, isCut, posPt, negPt, shapeColor } = tmpl;
 
       const shape = document.createElementNS(NS,'path');
       shape.setAttribute('d',
@@ -3116,31 +3085,6 @@ function renderCrossSectionChart(xsPoints, stationDist){
         ]),
         kind: isCut ? 'cut' : 'fill'
       };
-
-      // Water surface at the design flow depth (total depth minus freeboard) - only meaningful for
-      // an actual conveyance channel (a cut), drawn across the DESIGNED template width at that
-      // depth (same regular-trapezoid assumption Manning's capacity uses), not the real ground.
-      if(isCut && depth > 1e-6){
-        const freeboard = parseFloat(document.getElementById('freeboard').value) || 0;
-        const flowDepth = Math.max(0, depth - freeboard);
-        if(flowDepth > 1e-6){
-          const halfWater = halfN + sideSlope * flowDepth;
-          const waterElev = designElevHere + flowDepth;
-          const waterColor = '#0ea5e9';
-          const waterLine = document.createElementNS(NS,'line');
-          waterLine.setAttribute('x1', X(-halfWater)); waterLine.setAttribute('x2', X(halfWater));
-          waterLine.setAttribute('y1', Y(waterElev)); waterLine.setAttribute('y2', Y(waterElev));
-          waterLine.setAttribute('stroke', waterColor); waterLine.setAttribute('stroke-width', '2');
-          waterLine.setAttribute('stroke-dasharray', '5,3');
-          svg.appendChild(waterLine);
-          const waterLabel = document.createElementNS(NS,'text');
-          waterLabel.setAttribute('x', X(halfWater)+6); waterLabel.setAttribute('y', Y(waterElev)+4);
-          waterLabel.setAttribute('font-size','10'); waterLabel.setAttribute('font-family','JetBrains Mono, monospace'); waterLabel.setAttribute('font-weight','700');
-          waterLabel.setAttribute('fill', waterColor);
-          waterLabel.textContent = 'water (' + fmtElev(freeboard) + ' freeboard)';
-          svg.appendChild(waterLabel);
-        }
-      }
     }
   }
 
@@ -3356,39 +3300,6 @@ document.querySelectorAll('.measure-toggle').forEach(btn => {
 
 // Design elevation at any distance, extrapolating past the first/last point using that segment's
 // own slope so cut/fill stays defined even if a point gets dragged inside the line's real extent.
-// The local longitudinal slope of the design grade at an arbitrary station - which segment's
-// slope applies, signed (negative = falling in the direction the line was drawn). Manning's
-// equation needs the magnitude; the sign is kept so callers can tell a falling grade from a flat
-// or adverse one, which can't convey flow by gravity no matter how the channel is shaped.
-function designSlopeAt(dist){
-  const pts = designGrade.points;
-  if(pts.length < 2) return 0;
-  let a, b;
-  if(dist <= pts[0].dist){ a = pts[0]; b = pts[1]; }
-  else if(dist >= pts[pts.length-1].dist){ a = pts[pts.length-2]; b = pts[pts.length-1]; }
-  else {
-    a = pts[0]; b = pts[1];
-    for(let i=1;i<pts.length;i++){ if(dist <= pts[i].dist){ a = pts[i-1]; b = pts[i]; break; } }
-  }
-  const run = b.dist - a.dist;
-  return run > 1e-6 ? (b.elev - a.elev) / run : 0;
-}
-
-// Manning's equation for a trapezoidal channel flowing full to `depth`: Q = (1/n)*A*R^(2/3)*sqrt(S).
-// Deliberately uses the DESIGNED template shape (trapezoidArea's regular bottomWidth/sideSlope
-// trapezoid), not the real per-side daylight search - hydraulic capacity is a property of the
-// constructed channel, not the natural ground it happens to be cut into, so the idealized regular
-// section is the textbook-correct input here, not an approximation to improve on later.
-function manningCapacity(depth, bottomWidth, sideSlope, n, slopeFrac){
-  if(depth <= 0 || n <= 0 || slopeFrac <= 0) return null;
-  const A = trapezoidArea(depth, bottomWidth, sideSlope);
-  const P = bottomWidth + 2 * depth * Math.sqrt(1 + sideSlope*sideSlope);
-  if(A <= 0 || P <= 0) return null;
-  const R = A / P;
-  const Q = (1/n) * A * Math.pow(R, 2/3) * Math.sqrt(slopeFrac);
-  return { A, P, R, Q, V: Q / A };
-}
-
 function designElevAt(dist){
   const pts = designGrade.points;
   if(pts.length < 2) return null;
@@ -3638,13 +3549,6 @@ document.getElementById('btnAddGradePoint').addEventListener('click', () => {
 });
 document.getElementById('bottomWidth').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 document.getElementById('sideSlope').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
-document.getElementById('manningN').addEventListener('change', () => {
-  if(xsOpen && xsCurrentStationDist != null) loadCrossSection(xsCurrentStationDist);
-});
-document.getElementById('freeboard').addEventListener('change', () => {
-  if(xsOpen && xsCurrentStationDist != null) loadCrossSection(xsCurrentStationDist);
-});
-document.getElementById('minSlopePct').addEventListener('change', () => { if(designGrade) renderGradeEditor(); });
 
 function renderGradeEditor(){
   if(!designGrade) return;
@@ -3668,15 +3572,10 @@ function renderGradeEditor(){
       const gradePct = run > 1e-6 ? (next.elev - pt.elev) / run * 100 : 0;
       const sign = gradePct > 0.005 ? 'rise' : (gradePct < -0.005 ? 'fall' : '');
       const arrow = gradePct > 0.005 ? '↗' : (gradePct < -0.005 ? '↘' : '→');
-      // Flag a segment flatter than the minimum slope - a real design QA check, not just display:
-      // a drain graded too flat won't self-clean regardless of how the cross-section is shaped.
-      const minSlope = parseFloat(document.getElementById('minSlopePct').value) || 0;
-      const belowMin = minSlope > 0 && Math.abs(gradePct) < minSlope - 1e-6;
       html +=
         '<div class="grade-connector"><span class="gc-line"></span>' +
-          '<span class="gc-badge' + (sign ? ' '+sign : '') + (belowMin ? ' gc-warn' : '') +
-            '" title="' + (belowMin ? 'Below the ' + minSlope + '% minimum slope' : '') + '">' +
-            (belowMin ? '⚠ ' : '') + arrow + ' ' + Math.abs(gradePct).toFixed(2) + '% over ' + fmtDist(run) +
+          '<span class="gc-badge' + (sign ? ' '+sign : '') + '">' +
+            arrow + ' ' + Math.abs(gradePct).toFixed(2) + '% over ' + fmtDist(run) +
           '</span>' +
         '<span class="gc-line"></span></div>';
     }
@@ -4201,31 +4100,46 @@ function closeModal(){
 // The expanded panel floats over the map (no blocking backdrop) so the drawn line stays
 // hoverable and the station tracker keeps working while it's open — drag it anywhere,
 // including off to the side, by its header.
+//
+// The header packs several buttons/a <select> alongside the title, so dragging can't just bail
+// out the moment mousedown lands on one of those (that leaves only the bare title text as a real
+// grab target, which shrinks to almost nothing once the header wraps on a narrower window - the
+// header LOOKS fully draggable everywhere via its cursor:move, but was only draggable from a thin
+// strip). Instead, decide drag-vs-click the way real desktop UIs do: any mousedown on the header
+// can become a drag, but it only actually starts moving the panel once the mouse has moved past a
+// small threshold - a plain click (down+up with no real movement) on a button or select still
+// reaches it untouched, since nothing here calls preventDefault or updates panel position unless
+// dragging actually engaged.
 function makeDraggable(panel, handle){
-  let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+  const THRESHOLD = 4;
+  let armed = false, dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
   handle.addEventListener('mousedown', (e) => {
-    if(e.target.closest('button, select')) return;
+    if(e.button !== 0) return;
+    armed = true; dragging = false;
     const rect = panel.getBoundingClientRect();
-    panel.style.left = rect.left + 'px';
-    panel.style.top = rect.top + 'px';
-    panel.style.right = 'auto';
-    dragging = true;
     startX = e.clientX; startY = e.clientY;
     startLeft = rect.left; startTop = rect.top;
-    e.preventDefault();
   });
   document.addEventListener('mousemove', (e) => {
-    if(!dragging) return;
-    let nx = startLeft + (e.clientX - startX);
-    let ny = startTop + (e.clientY - startY);
+    if(!armed) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if(!dragging){
+      if(Math.hypot(dx, dy) < THRESHOLD) return;
+      dragging = true;
+      panel.style.left = startLeft + 'px';
+      panel.style.top = startTop + 'px';
+      panel.style.right = 'auto';
+      e.preventDefault();
+    }
+    let nx = startLeft + dx, ny = startTop + dy;
     nx = Math.max(0, Math.min(nx, window.innerWidth - panel.offsetWidth));
     ny = Math.max(0, Math.min(ny, window.innerHeight - panel.offsetHeight));
     panel.style.left = nx + 'px';
     panel.style.top = ny + 'px';
   });
-  document.addEventListener('mouseup', () => { dragging = false; });
+  document.addEventListener('mouseup', () => { armed = false; dragging = false; });
 }
-makeDraggable(document.querySelector('.modal-panel'), document.getElementById('modalDragHandle'));
+makeDraggable(document.querySelector('#chartModal .modal-panel'), document.getElementById('modalDragHandle'));
 
 // ---------- export ----------
 
