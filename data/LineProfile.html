@@ -409,6 +409,8 @@
   #chartModal .modal-panel{display:flex;flex-direction:column;}
   #chartModal .modal-panel > .modal-head, #chartModal .modal-panel > .datum-note{flex:none;}
   #chartModal .modal-panel > .modal-chart-wrap{flex:1 1 auto;min-height:0;}
+  .xs-slider-icon{cursor:grab;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.45));}
+  .xs-slider-icon:active{cursor:grabbing;}
   .resize-handle{
     position:absolute;right:2px;bottom:2px;width:18px;height:18px;
     cursor:nwse-resize;border-radius:4px;
@@ -1091,6 +1093,15 @@ const pinIcon = L.divIcon({
 });
 let searchMarker = null;
 
+// The Cross Section station indicator on the map doubles as a draggable slider - see
+// updateXsHighlight() below, where it's actually created as an L.Marker using this icon.
+const xsHandleIcon = L.divIcon({
+  className: 'xs-slider-icon',
+  html: '<svg width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="8" fill="#7c3aed" stroke="#fff" stroke-width="3"/></svg>',
+  iconSize: [22, 22],
+  iconAnchor: [11, 11]
+});
+
 // Live search-as-you-type against the same free Nominatim endpoint the old Enter-only search used
 // - a debounced dropdown of real candidates instead of guessing blind and hoping Enter finds the
 // right one. Keeps the exact same "pick a result, fly the map there, drop a pin" behavior, just
@@ -1354,6 +1365,11 @@ function resetAll(){
   closeModal();
   closeView3D();
   closeCrossSectionModal();
+  // xsCurrentStationDist now drives the persistent sidebar card too (not just the popup, which is
+  // all closeCrossSectionModal() itself still knows about), so a full profile reset - not just
+  // closing the popup - is the right place to actually clear it and pull the map slider off.
+  xsCurrentStationDist = null;
+  if(xsStationMapMarker){ map.removeLayer(xsStationMapMarker); xsStationMapMarker = null; }
   xsStations = [];
   document.getElementById('xsSidebarCard').style.display = 'none';
   document.getElementById('xsSidebarChartWrap').querySelectorAll('svg').forEach(n => n.remove());
@@ -2957,8 +2973,9 @@ document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && xsOpen) c
 function closeCrossSectionModal(){
   xsOpen = false;
   document.getElementById('xsModal').style.display = 'none';
-  xsCurrentStationDist = null;
-  updateXsHighlight();
+  // Deliberately doesn't touch xsCurrentStationDist or the map marker/slider anymore - both are
+  // shared with the persistent sidebar card now, which keeps showing (and tracking) the current
+  // station after the popup closes, not just while it's open.
   layoutPanels();
 }
 
@@ -2971,7 +2988,29 @@ function updateXsHighlight(){
   const p = xsCurrentStationDist != null ? profilePointAtDist(xsCurrentStationDist) : null;
   if(p && p.elev != null){
     if(!xsStationMapMarker){
-      xsStationMapMarker = L.circleMarker([p.lat, p.lon], { radius:8, color:'#fff', weight:3, fillColor:'#7c3aed', fillOpacity:1 }).addTo(map);
+      xsStationMapMarker = L.marker([p.lat, p.lon], { icon: xsHandleIcon, draggable: true, autoPan: true, zIndexOffset: 500 }).addTo(map);
+      // Doubles as a visual slider for the Cross Section station, right on the drawn line -
+      // Leaflet has no built-in "constrain to polyline" drag, so every tick snaps the marker back
+      // onto the nearest real profile sample instead of letting it float free. Live feedback while
+      // dragging (chart crosshair + 3D hover marker, via showStation - same function mouse-hovering
+      // the line already drives) is free since it's all from already-fetched profile data; the
+      // actual cross-section re-fetch (a real network call, and the DTM service is documented
+      // elsewhere in this file as genuinely flaky) only happens once, on drop.
+      xsStationMapMarker.on('drag', (e) => {
+        const ll = e.target.getLatLng();
+        const idx = nearestProfileIndex(ll.lat, ll.lng);
+        const sp = profile[idx];
+        if(!sp || sp.elev == null) return;
+        e.target.setLatLng([sp.lat, sp.lon]);
+        showStation(idx, true);
+      });
+      xsStationMapMarker.on('dragend', (e) => {
+        const ll = e.target.getLatLng();
+        const idx = nearestProfileIndex(ll.lat, ll.lng);
+        hideStation();
+        const sp = profile[idx];
+        if(sp && sp.elev != null) loadCrossSection(sp.dist);
+      });
     } else {
       xsStationMapMarker.setLatLng([p.lat, p.lon]);
     }
@@ -4047,8 +4086,10 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   svg.appendChild(cross);
 
   // Persistent "which cross-section am I on" marker - independent of mouse hover, so it stays put
-  // while the Cross Section panel is open instead of vanishing the moment the cursor leaves.
-  if(xsOpen && xsCurrentStationDist != null){
+  // while a cross-section is showing instead of vanishing the moment the cursor leaves. No longer
+  // gated on xsOpen (the floating popup) - the sidebar Cross Section card keeps a station current
+  // the whole time a profile exists, popup open or not.
+  if(xsCurrentStationDist != null){
     const xsp = profilePointAtDist(xsCurrentStationDist);
     if(xsp && xsp.elev != null && xsp.dist >= xMinM && xsp.dist <= xMaxM){
       const xx = X(xsp.dist), xy = Y(xsp.elev);
