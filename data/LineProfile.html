@@ -467,13 +467,13 @@
   }
   #view3dStatus.hidden{display:none;}
   .xs-panel{width:min(700px,92vw);top:100px;left:96px;}
-  #xsStatus{font-size:12.5px;color:var(--text-dim);margin-bottom:10px;}
-  #xsStatus.err{color:var(--danger);}
-  #xsChartWrap{
+  .xs-status{font-size:12.5px;color:var(--text-dim);margin-bottom:10px;}
+  .xs-status.err{color:var(--danger);}
+  .xs-chart-wrap{
     background:var(--surface-2);border-radius:10px;border:1px solid var(--border);
     position:relative;min-height:220px;
   }
-  #xsStationSelect{max-width:140px;}
+  .xs-station-select{max-width:140px;}
   .drag-dots{color:var(--text-faint);}
 </style>
 </head>
@@ -642,6 +642,24 @@
         <div class="chart-tooltip" id="chartTooltip"></div>
       </div>
       <div class="datum-note" id="datumNote"></div>
+    </div>
+
+    <div class="card" id="xsSidebarCard" style="display:none;">
+      <div class="card-head">
+        <h2>Cross Section</h2>
+        <button id="btnExpandXs" class="icon-btn" title="Expand">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="chart-controls">
+        <button id="xsSidebarPrev" class="icon-btn">‹</button>
+        <select id="xsSidebarStationSelect" class="xs-station-select"></select>
+        <button id="xsSidebarNext" class="icon-btn">›</button>
+      </div>
+      <div id="xsSidebarStatus" class="xs-status"></div>
+      <div id="xsSidebarChartWrap" class="xs-chart-wrap">
+        <div class="chart-tooltip" id="xsSidebarChartTooltip"></div>
+      </div>
     </div>
 
     <div class="card" id="gradeCard" style="display:none;">
@@ -877,15 +895,15 @@
       </h3>
       <div class="modal-head-right">
         <button id="xsPrev" class="icon-btn">‹</button>
-        <select id="xsStationSelect"></select>
+        <select id="xsStationSelect" class="xs-station-select"></select>
         <button id="xsNext" class="icon-btn">›</button>
         <button id="btnCloseXs" class="icon-btn">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
       </div>
     </div>
-    <div id="xsStatus"></div>
-    <div id="xsChartWrap">
+    <div id="xsStatus" class="xs-status"></div>
+    <div id="xsChartWrap" class="xs-chart-wrap">
       <div class="chart-tooltip" id="xsChartTooltip"></div>
     </div>
     <div class="datum-note">The alignment (your drawn line) sits at the centre (0m) — negative is left, positive is right, facing along the direction you drew it.</div>
@@ -1336,6 +1354,11 @@ function resetAll(){
   closeModal();
   closeView3D();
   closeCrossSectionModal();
+  xsStations = [];
+  document.getElementById('xsSidebarCard').style.display = 'none';
+  document.getElementById('xsSidebarChartWrap').querySelectorAll('svg').forEach(n => n.remove());
+  document.getElementById('xsSidebarStationSelect').innerHTML = '';
+  document.getElementById('xsSidebarStatus').innerHTML = '';
   designGrade = null;
   document.getElementById('gradeEmptyState').style.display = '';
   document.getElementById('gradeEditor').style.display = 'none';
@@ -1522,6 +1545,9 @@ function finalizeProfile(length, myRequestId, statusHtml){
   refreshChart();
   document.getElementById('exportCard').style.display = '';
   document.getElementById('gradeCard').style.display = '';
+  document.getElementById('xsSidebarCard').style.display = '';
+  buildXsStationList();
+  loadCrossSection(xsStations[0]);
   document.getElementById('btnSaveProject').disabled = false;
   loadSurveyCoverage(profile, myRequestId); // best-effort, doesn't block the main profile
   statusEl.className = '';
@@ -2922,6 +2948,10 @@ document.getElementById('btnCloseXs').addEventListener('click', () => closeCross
 document.getElementById('xsStationSelect').addEventListener('change', (e) => loadCrossSection(parseFloat(e.target.value)));
 document.getElementById('xsPrev').addEventListener('click', () => stepStation(-1));
 document.getElementById('xsNext').addEventListener('click', () => stepStation(1));
+document.getElementById('xsSidebarStationSelect').addEventListener('change', (e) => loadCrossSection(parseFloat(e.target.value)));
+document.getElementById('xsSidebarPrev').addEventListener('click', () => stepStation(-1));
+document.getElementById('xsSidebarNext').addEventListener('click', () => stepStation(1));
+document.getElementById('btnExpandXs').addEventListener('click', () => openCrossSectionModal());
 document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && xsOpen) closeCrossSectionModal(); });
 
 function closeCrossSectionModal(){
@@ -2951,28 +2981,38 @@ function updateXsHighlight(){
   }
 }
 
-function openCrossSectionModal(){
-  if(!view3dGridInfo || !profile || profile.length < 2) return;
-  xsOpen = true;
-  document.getElementById('xsModal').style.display = 'block';
-  bringToFront(document.querySelector('.xs-panel'));
-  layoutPanels();
+// Builds the station list once (from the finished profile, independent of whether 3D has ever
+// been opened - crossSectionFrame/fetchCrossSection derive their own UTM zone) and populates both
+// the sidebar card's and the popup's dropdowns from the identical list, so they can never disagree
+// on what stations exist. Called once when a profile finishes building; the station list itself
+// doesn't change afterward (only the per-station fetch width, read live from corridorWidth).
+function buildXsStationList(){
   const totalLen = profile[profile.length-1].dist;
   const interval = niceGridSpacing(totalLen, 15);
   xsStations = [];
   for(let d = 0; d <= totalLen + 1e-6; d += interval) xsStations.push(Math.min(d, totalLen));
-  const sel = document.getElementById('xsStationSelect');
-  sel.innerHTML = xsStations.map(d => '<option value="' + d + '">' + fmtStation(d) + '</option>').join('');
-  loadCrossSection(xsStations[0]);
+  const optionsHtml = xsStations.map(d => '<option value="' + d + '">' + fmtStation(d) + '</option>').join('');
+  document.getElementById('xsStationSelect').innerHTML = optionsHtml;
+  document.getElementById('xsSidebarStationSelect').innerHTML = optionsHtml;
+}
+
+function openCrossSectionModal(){
+  if(!profile || profile.length < 2 || !xsStations.length) return;
+  xsOpen = true;
+  document.getElementById('xsModal').style.display = 'block';
+  bringToFront(document.querySelector('.xs-panel'));
+  layoutPanels();
+  // Reuses whatever station the sidebar card is already showing, if any, rather than resetting
+  // back to the first station - popping this out shouldn't lose where you already were.
+  loadCrossSection(xsCurrentStationDist != null ? xsCurrentStationDist : xsStations[0]);
 }
 
 function stepStation(delta){
-  const sel = document.getElementById('xsStationSelect');
-  const idx = sel.selectedIndex + delta;
-  if(idx >= 0 && idx < sel.options.length){
-    sel.selectedIndex = idx;
-    loadCrossSection(parseFloat(sel.value));
-  }
+  if(!xsStations.length) return;
+  let idx = xsStations.indexOf(xsCurrentStationDist);
+  if(idx < 0) idx = 0;
+  idx += delta;
+  if(idx >= 0 && idx < xsStations.length) loadCrossSection(xsStations[idx]);
 }
 
 // The real-world frame (centreline UTM point + perpendicular unit vector) a cross-section at this
@@ -3034,20 +3074,32 @@ async function fetchCrossSection(stationDist, bufferM){
   });
 }
 
+// Cross Section exists in two places at once - a permanent sidebar card (always available once a
+// profile exists) and a floating popup (opened from the 3D Terrain panel, for viewing it tiled
+// alongside 3D/Profile). Both read/write the same xsStations/xsCurrentStationDist state, so
+// stepping station in either one keeps the other in sync automatically. syncXsSelects keeps both
+// <select> elements agreeing on the current station regardless of which one (or neither) drove
+// the change - setting .value directly rather than tracking a specific index, since the two
+// dropdowns' selectedIndex can independently drift from Prev/Next in either panel.
+function syncXsSelects(stationDist){
+  document.getElementById('xsStationSelect').value = stationDist;
+  document.getElementById('xsSidebarStationSelect').value = stationDist;
+}
+
 async function loadCrossSection(stationDist){
   // Remembered so a failed fetch (the Ontario DTM service is documented elsewhere in this file's
   // history as genuinely flaky under repeated short-segment queries) can roll everything back to
   // the last station that actually loaded, rather than leaving the map/chart highlight pointing at
-  // a station whose chart never rendered. Deliberately NOT read from the <select> here - Prev/Next
-  // (stepStation) already moves its selectedIndex to the new station before calling this, so by
-  // this point the dropdown itself no longer knows what the previous selection was either; the
-  // correct previous index is looked up from xsStations by distance instead, in the catch block.
+  // a station whose chart never rendered.
   const prevStationDist = xsCurrentStationDist;
   xsCurrentStationDist = stationDist;
   updateXsHighlight();
-  const statusDiv = document.getElementById('xsStatus');
-  statusDiv.className = '';
-  statusDiv.innerHTML = spinnerTag() + 'Fetching cross-section at ' + fmtStation(stationDist) + '…';
+  syncXsSelects(stationDist);
+  const fetchingHtml = spinnerTag() + 'Fetching cross-section at ' + fmtStation(stationDist) + '…';
+  const sidebarStatus = document.getElementById('xsSidebarStatus');
+  const popupStatus = document.getElementById('xsStatus');
+  sidebarStatus.className = ''; sidebarStatus.innerHTML = fetchingHtml;
+  if(xsOpen){ popupStatus.className = ''; popupStatus.innerHTML = fetchingHtml; }
   // The old <svg> (if any) is deliberately left in place here - renderCrossSectionChart only
   // removes it once a new one is actually ready to take its place, so a failed fetch below leaves
   // the last successfully-loaded chart visible instead of an empty panel.
@@ -3055,7 +3107,8 @@ async function loadCrossSection(stationDist){
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
     const xsPoints = await fetchCrossSection(stationDist, bufferM);
     lastXsPoints = xsPoints;
-    const xsAreaResult = renderCrossSectionChart(xsPoints, stationDist);
+    const xsAreaResult = renderCrossSectionChart(xsPoints, stationDist, document.getElementById('xsSidebarChartWrap'), document.getElementById('xsSidebarChartTooltip'));
+    if(xsOpen) renderCrossSectionChart(xsPoints, stationDist, document.getElementById('xsChartWrap'), document.getElementById('xsChartTooltip'));
     const valid = xsPoints.filter(p => p.elev != null);
     const left = valid[0], right = valid[valid.length-1];
     const grade = (left && right) ? ((right.elev - left.elev) / (bufferM*2) * 100) : null;
@@ -3074,23 +3127,20 @@ async function loadCrossSection(stationDist){
         text += ' · ' + xsAreaResult.kind + ' area ' + areaVal.toFixed(2) + ' ' + areaUnit;
       }
     }
-    statusDiv.textContent = text;
+    sidebarStatus.textContent = text;
+    if(xsOpen) popupStatus.textContent = text;
   } catch(err){
     xsCurrentStationDist = prevStationDist;
-    if(prevStationDist != null){
-      const revertIdx = xsStations.indexOf(prevStationDist);
-      if(revertIdx >= 0) document.getElementById('xsStationSelect').selectedIndex = revertIdx;
-    }
+    if(prevStationDist != null) syncXsSelects(prevStationDist);
     updateXsHighlight();
-    statusDiv.className = 'err';
-    statusDiv.textContent = 'Could not load ' + fmtStation(stationDist) + ': ' + err.message +
+    const errText = 'Could not load ' + fmtStation(stationDist) + ': ' + err.message +
       (prevStationDist != null ? ' — still showing ' + fmtStation(prevStationDist) + '. Try again.' : ' Try again.');
+    sidebarStatus.className = 'err'; sidebarStatus.textContent = errText;
+    if(xsOpen){ popupStatus.className = 'err'; popupStatus.textContent = errText; }
   }
 }
 
-function renderCrossSectionChart(xsPoints, stationDist){
-  const wrap = document.getElementById('xsChartWrap');
-  const tooltip = document.getElementById('xsChartTooltip');
+function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
   const w = wrap.clientWidth || 640, h = 230;
   const pad = { l: 54, r: 16, t: 16, b: 30 };
   // Computed once per render (not per mousemove tick) - the frame this station's own perpendicular
