@@ -406,6 +406,9 @@
   .modal-head-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
   .view3d-panel{width:min(1200px,94vw);max-height:90vh;top:56px;left:56px;display:flex;flex-direction:column;}
   .view3d-panel > .modal-head, .view3d-panel > .datum-note{flex:none;}
+  #chartModal .modal-panel{display:flex;flex-direction:column;}
+  #chartModal .modal-panel > .modal-head, #chartModal .modal-panel > .datum-note{flex:none;}
+  #chartModal .modal-panel > .modal-chart-wrap{flex:1 1 auto;min-height:0;}
   .resize-handle{
     position:absolute;right:2px;bottom:2px;width:18px;height:18px;
     cursor:nwse-resize;border-radius:4px;
@@ -3698,10 +3701,11 @@ function refreshChart(){
 
 function updateDatumNote(){
   const veText = veMode === 'auto' ? '' : (' · Vertical exaggeration: ' + veMode + '×');
-  const zoomText = chartXView ? ' · Zoomed — double-click chart to reset' : ' · Scroll on chart to zoom, drag to pan';
-  const text = 'Vertical datum: CGVD2013 (gravity-related height) · Horizontal: WGS84 (EPSG:4326)' + veText + zoomText;
-  const a = document.getElementById('datumNote'); if(a) a.textContent = text;
-  const b = document.getElementById('modalDatumNote'); if(b) b.textContent = text;
+  const base = 'Vertical datum: CGVD2013 (gravity-related height) · Horizontal: WGS84 (EPSG:4326)' + veText;
+  const sidebarZoom = chartXView ? ' · Zoomed — double-click chart to reset' : ' · Scroll on chart to zoom, drag to pan';
+  const modalZoom = chartXView ? ' · Zoomed — double-click chart to reset' : ' · Alt+Scroll to zoom, drag to pan';
+  const a = document.getElementById('datumNote'); if(a) a.textContent = base + sidebarZoom;
+  const b = document.getElementById('modalDatumNote'); if(b) b.textContent = base + modalZoom;
 }
 
 function renderChartInto(prof, wrap, tooltip, expanded){
@@ -3718,7 +3722,14 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   // the instant you let go (see the mouseup handler below).
   const { yMinM, yMaxM } = gradeDragState.active ? gradeDragState.frozenRange : computeChartYRange(prof, xMinM, xMaxM);
 
-  const baseH = expanded ? 520 : 230;
+  // In the expanded/popped-out panel, fill whatever height the panel actually has (it flexes to
+  // fill it - see the #chartModal .modal-panel CSS) rather than a flat 520px regardless of size.
+  // A fixed height only made sense when this panel always got a generous fixed max-height; once
+  // it can be tiled down alongside other panels, 520px routinely exceeded what was left, pushing
+  // the datum note (and sometimes the bottom of the chart itself) out of view. The non-auto VE
+  // branch right below is untouched - deliberately allowed to exceed this and scroll, since a real
+  // exaggeration is supposed to visibly need more room.
+  const baseH = expanded ? Math.max(200, wrap.clientHeight || 520) : 230;
   let h = baseH;
   if(veMode !== 'auto'){
     // True exaggeration: vertical px/metre = horizontal px/metre * VE. For a shallow line
@@ -4016,6 +4027,12 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   // listener pair registered once near gradeDragState above; this just seeds chartPanState with
   // plain numbers (never the svg/pad objects themselves) at the moment the drag starts.
   svg.addEventListener('wheel', (ev) => {
+    // In the expanded/popped-out panel, a plain wheel needs to be free to scroll the panel itself
+    // for the rare case content still exceeds it (a manually-picked high vertical exaggeration is
+    // allowed to do that on purpose - see the baseH comment above). Alt, not Ctrl, because Ctrl+wheel
+    // is the browser's own page-zoom gesture - hijacking it here would fight that. The always-zoom
+    // sidebar chart is untouched - it doesn't have the same below-the-fold content to reach.
+    if(expanded && !ev.altKey) return;
     ev.preventDefault();
     const rect = svg.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
