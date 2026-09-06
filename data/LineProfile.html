@@ -3035,13 +3035,22 @@ async function fetchCrossSection(stationDist, bufferM){
 }
 
 async function loadCrossSection(stationDist){
+  // Remembered so a failed fetch (the Ontario DTM service is documented elsewhere in this file's
+  // history as genuinely flaky under repeated short-segment queries) can roll everything back to
+  // the last station that actually loaded, rather than leaving the map/chart highlight pointing at
+  // a station whose chart never rendered. Deliberately NOT read from the <select> here - Prev/Next
+  // (stepStation) already moves its selectedIndex to the new station before calling this, so by
+  // this point the dropdown itself no longer knows what the previous selection was either; the
+  // correct previous index is looked up from xsStations by distance instead, in the catch block.
+  const prevStationDist = xsCurrentStationDist;
   xsCurrentStationDist = stationDist;
   updateXsHighlight();
   const statusDiv = document.getElementById('xsStatus');
-  const wrap = document.getElementById('xsChartWrap');
   statusDiv.className = '';
   statusDiv.innerHTML = spinnerTag() + 'Fetching cross-section at ' + fmtStation(stationDist) + '…';
-  wrap.querySelectorAll('svg').forEach(n => n.remove());
+  // The old <svg> (if any) is deliberately left in place here - renderCrossSectionChart only
+  // removes it once a new one is actually ready to take its place, so a failed fetch below leaves
+  // the last successfully-loaded chart visible instead of an empty panel.
   try{
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
     const xsPoints = await fetchCrossSection(stationDist, bufferM);
@@ -3067,8 +3076,15 @@ async function loadCrossSection(stationDist){
     }
     statusDiv.textContent = text;
   } catch(err){
+    xsCurrentStationDist = prevStationDist;
+    if(prevStationDist != null){
+      const revertIdx = xsStations.indexOf(prevStationDist);
+      if(revertIdx >= 0) document.getElementById('xsStationSelect').selectedIndex = revertIdx;
+    }
+    updateXsHighlight();
     statusDiv.className = 'err';
-    statusDiv.textContent = 'Could not build cross-section: ' + err.message;
+    statusDiv.textContent = 'Could not load ' + fmtStation(stationDist) + ': ' + err.message +
+      (prevStationDist != null ? ' — still showing ' + fmtStation(prevStationDist) + '. Try again.' : ' Try again.');
   }
 }
 
@@ -3096,6 +3112,10 @@ function renderCrossSectionChart(xsPoints, stationDist){
   const X = o => pad.l + (o - xMin) / (xMax - xMin) * (w - pad.l - pad.r);
   const Y = e => pad.t + (1 - (e - yMin) / (yMax - yMin)) * (h - pad.t - pad.b);
 
+  // Only cleared now that a new chart is actually ready to take its place - moved out of
+  // loadCrossSection, which used to remove this unconditionally before even starting the fetch,
+  // leaving the panel blank for the whole request and permanently blank on any failure.
+  wrap.querySelectorAll('svg').forEach(n => n.remove());
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('width', w); svg.setAttribute('height', h);
   svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
