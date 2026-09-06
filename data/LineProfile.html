@@ -2626,6 +2626,36 @@ function profilePointAtDist(d){
   return { lat: a.lat + (b.lat-a.lat)*t, lon: a.lon + (b.lon-a.lon)*t, elev: a.elev + (b.elev-a.elev)*t, dist: d };
 }
 
+// A live "where's my cursor" marker on the 3D terrain, synced to hovering either the Elevation
+// Profile chart (from showStation, moving along the alignment) or the Cross Section chart (from
+// its own mousemove handler, moving across the alignment at that section's station) - created
+// lazily on first use and just toggled/repositioned after that, since view3dScene itself persists
+// across close/reopen (initThreeScene only builds it once, guarded by view3dRenderer).
+let view3dHoverMarker = null;
+function show3DHoverPoint(lat, lon, elev){
+  if(!view3dOpen || !view3dScene || !view3dGridInfo || elev == null) return;
+  const epsg = 'EPSG:' + view3dGridInfo.sr;
+  const [ux, uy] = proj4('WGS84', epsg, [lon, lat]);
+  const { x, z } = utmToLocal3D(ux, uy);
+  const ve = parseFloat(document.getElementById('ve3d').value) || 1;
+  const y = (elev - view3dMeanElev) * ve + Math.max(ve * 0.4, 1); // small lift, same reasoning as the draped line - avoids z-fighting with the surface
+  if(!view3dHoverMarker){
+    const geom = new THREE.SphereGeometry(1, 16, 16);
+    const mat = new THREE.MeshBasicMaterial({ color: PALETTE.accentDark });
+    view3dHoverMarker = new THREE.Mesh(geom, mat);
+    view3dScene.add(view3dHoverMarker);
+  }
+  // Sized relative to the scene so it reads at a consistent visual size regardless of corridor
+  // length, the same idea buildStationMarkers3D's own label scaling already uses.
+  const s = Math.max(view3dSceneRadius * 0.012, 0.6);
+  view3dHoverMarker.scale.set(s, s, s);
+  view3dHoverMarker.position.set(x, y, z);
+  view3dHoverMarker.visible = true;
+}
+function hide3DHoverPoint(){
+  if(view3dHoverMarker) view3dHoverMarker.visible = false;
+}
+
 // Real alignment station markers directly on the drawn line itself (STA 0+000, 0+050, ...),
 // same convention and spacing style as the 2D chart's hover tooltip - a short perpendicular tick
 // plus a chainage label at each interval, not a separate ground-reference grid.
@@ -2945,24 +2975,23 @@ function stepStation(delta){
   }
 }
 
-// Builds a short perpendicular line at the station (using the same local-tangent estimation as
-// the 3D station markers) and fetches real elevation samples across it via getSamples.
-async function fetchCrossSection(stationDist, bufferM){
+// The real-world frame (centreline UTM point + perpendicular unit vector) a cross-section at this
+// station is built from - same local-tangent estimation as the 3D station markers. Extracted so
+// the live 3D hover tracker (show3DHoverPoint, via the chart's own mousemove handler below) can
+// place a point on the EXACT line fetchCrossSection actually sampled, rather than a close-but-
+// independently-recomputed one. Returns null rather than throwing so callers that just want a
+// best-effort position (the hover tracker) don't need their own try/catch.
+function crossSectionFrame(stationDist){
   const p = profilePointAtDist(stationDist);
-  if(!p || p.elev == null) throw new Error('no elevation data at this station');
-  const microStep = Math.min(2, stationDist, profile[profile.length-1].dist - stationDist) || 0.5;
+  if(!p || p.elev == null) return null;
+  const totalLen = profile[profile.length-1].dist;
+  const microStep = Math.min(2, stationDist, totalLen - stationDist) || 0.5;
   const back = profilePointAtDist(Math.max(0, stationDist - microStep));
-  const fwd = profilePointAtDist(Math.min(profile[profile.length-1].dist, stationDist + microStep));
-  // Derived independently from this station's own longitude - NOT from view3dGridInfo, which only
-  // exists once the 3D view has been opened at least once. This function is also called directly
-  // by the PDF report (which may run before 3D has ever been opened), so it can't assume that
-  // global state exists; deriving its own zone here matches exactly what buildCorridorGrid() does
-  // for the same line anyway, just evaluated at this specific station's longitude.
+  const fwd = profilePointAtDist(Math.min(totalLen, stationDist + microStep));
   const zone = utmZoneFor(p.lon);
-  if(zone < 15 || zone > 18) throw new Error('this station is in UTM zone ' + zone + 'N, outside the zones set up for this (15N-18N covers all of Ontario).');
+  if(zone < 15 || zone > 18) return null;
   const epsg = 'EPSG:' + (26900 + zone);
   const [ux, uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
-
   let dx = 1, dz = 0;
   if(back && fwd && back.elev != null && fwd.elev != null){
     const [bx, by] = proj4('WGS84', epsg, [back.lon, back.lat]);
@@ -2970,7 +2999,23 @@ async function fetchCrossSection(stationDist, bufferM){
     dx = fx - bx; dz = fy - by;
     const len = Math.hypot(dx, dz) || 1; dx /= len; dz /= len;
   }
-  const perpX = -dz, perpZ = dx;
+  return { ux, uy, perpX: -dz, perpZ: dx, epsg };
+}
+
+// Builds a short perpendicular line at the station and fetches real elevation samples across it
+// via getSamples. Derived independently from this station's own longitude - NOT from
+// view3dGridInfo, which only exists once the 3D view has been opened at least once. This function
+// is also called directly by the PDF report (which may run before 3D has ever been opened), so it
+// can't assume that global state exists; deriving its own zone matches exactly what
+// buildCorridorGrid() does for the same line anyway, just evaluated at this specific station.
+async function fetchCrossSection(stationDist, bufferM){
+  const frame = crossSectionFrame(stationDist);
+  if(!frame){
+    const p = profilePointAtDist(stationDist);
+    if(!p || p.elev == null) throw new Error('no elevation data at this station');
+    throw new Error('this station is in UTM zone ' + utmZoneFor(p.lon) + 'N, outside the zones set up for this (15N-18N covers all of Ontario).');
+  }
+  const { ux, uy, perpX, perpZ, epsg } = frame;
 
   const leftUTM = [ux - perpX*bufferM, uy - perpZ*bufferM];
   const rightUTM = [ux + perpX*bufferM, uy + perpZ*bufferM];
@@ -3032,6 +3077,9 @@ function renderCrossSectionChart(xsPoints, stationDist){
   const tooltip = document.getElementById('xsChartTooltip');
   const w = wrap.clientWidth || 640, h = 230;
   const pad = { l: 54, r: 16, t: 16, b: 30 };
+  // Computed once per render (not per mousemove tick) - the frame this station's own perpendicular
+  // line was actually sampled from, so the live 3D hover tracker below can place a point on it.
+  const hoverFrame = crossSectionFrame(stationDist);
 
   const valid = xsPoints.filter(p => p.elev != null);
   if(!valid.length) return;
@@ -3171,11 +3219,11 @@ function renderCrossSectionChart(xsPoints, stationDist){
   svg.addEventListener('mousemove', (ev) => {
     const rect = svg.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
-    if(mx < pad.l || mx > w-pad.r){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; return; }
+    if(mx < pad.l || mx > w-pad.r){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; hide3DHoverPoint(); return; }
     const o = xMin + (mx-pad.l)/(w-pad.l-pad.r)*(xMax-xMin);
     let nearest = xsPoints[0], best = Infinity;
     for(const p of xsPoints){ const diff = Math.abs(p.offset-o); if(diff<best){ best=diff; nearest=p; } }
-    if(nearest.elev == null){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; return; }
+    if(nearest.elev == null){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; hide3DHoverPoint(); return; }
     const x = X(nearest.offset), y = Y(nearest.elev);
     cross.setAttribute('x1',x); cross.setAttribute('x2',x); cross.style.display='';
     dot.setAttribute('cx',x); dot.setAttribute('cy',y); dot.style.display='';
@@ -3183,8 +3231,13 @@ function renderCrossSectionChart(xsPoints, stationDist){
     tooltip.style.left = Math.min(x+8, w-140)+'px';
     tooltip.style.top = Math.max(y-40,2)+'px';
     tooltip.innerHTML = '<div class="tt-station">' + fmtDist(Math.abs(nearest.offset)) + (nearest.offset<0?' L':(nearest.offset>0?' R':' (centre)')) + '</div><div class="tt-elev">' + fmtElev(nearest.elev) + '</div>';
+    if(hoverFrame){
+      const worldUTM = [hoverFrame.ux + hoverFrame.perpX*nearest.offset, hoverFrame.uy + hoverFrame.perpZ*nearest.offset];
+      const [lon, lat] = proj4(hoverFrame.epsg, 'WGS84', worldUTM);
+      show3DHoverPoint(lat, lon, nearest.elev);
+    }
   });
-  svg.addEventListener('mouseleave', () => { cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; });
+  svg.addEventListener('mouseleave', () => { cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; hide3DHoverPoint(); });
 
   wrap.appendChild(svg);
   return xsAreaResult;
@@ -4109,6 +4162,7 @@ function showStation(idx, fromMap){
   } else {
     hoverMarker.setLatLng([p.lat, p.lon]);
   }
+  show3DHoverPoint(p.lat, p.lon, p.elev);
 }
 
 function hideStation(){
@@ -4118,6 +4172,7 @@ function hideStation(){
     ci.tooltip.style.display = 'none';
   });
   if(hoverMarker){ map.removeLayer(hoverMarker); hoverMarker = null; }
+  hide3DHoverPoint();
 }
 
 window.addEventListener('resize', () => {
