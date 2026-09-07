@@ -2326,7 +2326,11 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
   // value alone left the fetched extent short at the corners (confirmed visually: a gray unsampled
   // triangle at one edge until this was tied to the real half-width instead).
   const actualHalfWidthM = (ppPlanH / 2) / ppScale;
-  const marginM = Math.max(actualHalfWidthM * 1.3, 25);
+  // A bit of run-off past the actual start/end stations (see edgeMarginM below) so the strip shows
+  // the outer limits of the corridor rather than cropping dead-on at the two endpoints - the fetched
+  // source extent has to cover that too, not just the lateral half-width.
+  const edgeMarginM = Math.max(5, Math.min(40, totalLen * 0.08));
+  const marginM = Math.max(actualHalfWidthM * 1.3, edgeMarginM * 1.2, 25);
   const sxmin = Math.min(...utm2.map(p=>p.x)) - marginM, sxmax = Math.max(...utm2.map(p=>p.x)) + marginM;
   const symin = Math.min(...utm2.map(p=>p.y)) - marginM, symax = Math.max(...utm2.map(p=>p.y)) + marginM;
   // Source resolution matches whatever the strip is actually zoomed to (1/ppScale metres per output
@@ -2371,6 +2375,19 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
     return out;
   }
 
+  // Beyond the real station range, keep going in a straight line from whichever endpoint's own
+  // local tangent (rather than clamping to the endpoint and repeating that one column) - shows a
+  // plausible bit of "outer limits" run-off past the actual start/end rather than an abrupt crop.
+  function frameAtStationExtended(s){
+    if(s >= 0 && s <= totalLen) return crossSectionFrame(s);
+    const atStart = s < 0;
+    const base = crossSectionFrame(atStart ? 0 : totalLen);
+    if(!base) return null;
+    const tangentX = base.perpZ, tangentZ = -base.perpX;
+    const overshoot = atStart ? s : (s - totalLen);
+    return { ux: base.ux + tangentX*overshoot, uy: base.uy + tangentZ*overshoot, perpX: base.perpX, perpZ: base.perpZ };
+  }
+
   const outCanvas = document.createElement('canvas');
   outCanvas.width = ppW; outCanvas.height = ppPlanH;
   const octx = outCanvas.getContext('2d');
@@ -2379,8 +2396,8 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
 
   for(let x = 0; x < ppW; x++){
     const s = (x - ppPad.l) / ppScale;
-    const inRange = s >= -1e-6 && s <= totalLen + 1e-6;
-    const frame = inRange ? crossSectionFrame(Math.max(0, Math.min(totalLen, s))) : null;
+    const inRange = s >= -edgeMarginM - 1e-6 && s <= totalLen + edgeMarginM + 1e-6;
+    const frame = inRange ? frameAtStationExtended(s) : null;
     for(let y = 0; y < ppPlanH; y++){
       const idx = (y * ppW + x) * 4;
       if(!frame){ od[idx]=240; od[idx+1]=240; od[idx+2]=244; od[idx+3]=255; continue; }
@@ -2516,12 +2533,14 @@ async function generatePdfReport(){
     // the whole report, matching the same resilience precedent as the cross-section fetches below.
     // Landscape (see .pr-landscape) gives this sheet roughly 240mm of usable width instead of
     // portrait's ~177mm - ppW is scaled up by that same ratio so the extra physical width becomes
-    // extra horizontal resolution/station spacing rather than just stretching the same rendered
-    // size, while ppPlanH/ppProfileH are left alone so the sheet's rendered height doesn't grow.
-    const ppW = 1160, ppPad = { l: 58, r: 16 }, ppProfileH = 220;
+    // extra horizontal resolution/station spacing. ppPlanH/ppProfileH are ALSO bumped up (unlike
+    // ppW, these were left at their portrait sizes originally, which left a large blank gap between
+    // the graphic and the title block on the much taller landscape page - a real, visible defect,
+    // not just a missed opportunity).
+    const ppW = 1160, ppPad = { l: 58, r: 16 }, ppProfileH = 430;
     const ppScale = (ppW - ppPad.l - ppPad.r) / totalLen;
     const ppBufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
-    const ppPlanH = Math.max(120, Math.min(320, Math.round(2 * ppBufferM * ppScale)));
+    const ppPlanH = Math.max(200, Math.min(400, Math.round(2 * ppBufferM * ppScale)));
     let planImgDataUrl = null, planProfileError = null;
     try{
       planImgDataUrl = await buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalLen);
@@ -2574,7 +2593,11 @@ async function generatePdfReport(){
         xsIntervalLabel = 'At Critical Stations';
       }
       stationEntries.sort((a,b) => a.dist - b.dist);
-      if(stationEntries.length > 40) throw new Error('cross-section interval too small — ' + stationEntries.length + ' stations would be generated (max 40). Try a larger interval.');
+      // Capped generously enough that a real drainage line at a 20m interval (the field's own
+      // default) doesn't hit it - a 1600m line at 20m already gets close to this on its own -
+      // while still guarding against a genuinely mistyped interval (e.g. 1m on a multi-km line)
+      // firing off hundreds of parallel fetches at once.
+      if(stationEntries.length > 80) throw new Error('cross-section interval too small — ' + stationEntries.length + ' stations would be generated (max 80). Try a larger interval.');
       const bufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
       const settled = await Promise.allSettled(stationEntries.map(entry =>
         fetchCrossSection(entry.dist, bufferM).then(xsPoints => ({ entry, xsPoints }))
