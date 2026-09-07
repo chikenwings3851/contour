@@ -485,6 +485,13 @@
   #printReport .stats-grid{ page-break-inside:avoid; }
   .pr-chart-wrap{ border:1px solid #d8dae8; padding:9px; page-break-inside:avoid; }
   .pr-chart-wrap svg{ display:block; width:100%; height:auto; }
+  .pr-pp-wrap{ position:relative; page-break-inside:avoid; }
+  .pr-pp-plan{ position:relative; border:1px solid #d8dae8; overflow:hidden; }
+  .pr-pp-plan img{ display:block; width:100%; height:auto; }
+  .pr-pp-profile{ border:1px solid #d8dae8; border-top:none; }
+  .pr-pp-profile svg{ display:block; width:100%; height:auto; }
+  .pr-pp-matchlines{ position:absolute; top:0; left:0; width:100%; height:100%; }
+  .pr-pp-note{ position:absolute; top:5px; left:5px; background:rgba(255,255,255,0.88); border-radius:4px; padding:3px 7px; font-size:7.5px; font-weight:600; color:#3a3f4e; max-width:60%; line-height:1.35; }
   .pr-xs-row{ display:grid; grid-template-columns:1fr 1fr; gap:11px; page-break-inside:avoid; }
   .pr-xs-card{ border:1px solid #d8dae8; padding:9px; }
   .pr-xs-card .pr-xs-title{ font-size:11px; font-weight:700; margin-bottom:6px; }
@@ -2244,30 +2251,123 @@ function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
   return svg;
 }
 
-// Renames every id="..." inside a cloned SVG (and any fill/stroke/filter/clip-path/mask attribute
-// referencing url(#id)) by appending suffix, so a print-report clone of a live chart never shares an
-// id with its source - without this, the clone's <linearGradient>/<filter> defs would collide with the
-// live chart's and url(#id) lookups (first-match-in-document-order, same as getElementById) would start
-// resolving to whichever copy sits first in the DOM.
-function localizeClonedSvgIds(svgEl, suffix){
-  const idMap = new Map();
-  const idEls = svgEl.hasAttribute('id') ? [svgEl, ...svgEl.querySelectorAll('[id]')] : [...svgEl.querySelectorAll('[id]')];
-  idEls.forEach(el => {
-    const oldId = el.getAttribute('id');
-    const newId = oldId + suffix;
-    idMap.set(oldId, newId);
-    el.setAttribute('id', newId);
+// Builds a self-contained ground-profile SVG for print, independent of whatever zoom/width the live
+// chart panel happens to be at - always the full 0..totalLen extent, at the exact w/pad the Plan &
+// Profile sheet's straightened plan strip above it uses, so a vertical line through both lands on
+// the same station by construction rather than by coincidence.
+function buildStaticProfileSVG(prof, w, pad, h){
+  const totalLen = prof[prof.length-1].dist;
+  const PT = 10, PB = 24;
+  const { yMinM, yMaxM } = computeChartYRange(prof, 0, totalLen);
+  const X = d => pad.l + d/totalLen*(w-pad.l-pad.r);
+  const Y = e => PT + (1-(e-yMinM)/(yMaxM-yMinM))*(h-PT-PB);
+
+  let gridSvg = '';
+  const yStep = niceGridSpacing(yMaxM-yMinM, 5);
+  for(let e = Math.ceil(yMinM/yStep)*yStep; e <= yMaxM+1e-6; e += yStep){
+    const y = Y(e);
+    gridSvg += '<line x1="'+pad.l+'" y1="'+y.toFixed(1)+'" x2="'+(w-pad.r)+'" y2="'+y.toFixed(1)+'" stroke="#e7e9f2" stroke-width="1"/>' +
+      '<text x="'+(pad.l-6)+'" y="'+(y+3.2).toFixed(1)+'" font-size="9" fill="#6b7080" text-anchor="end">'+fmtElev(e)+'</text>';
+  }
+  const xStep = niceGridSpacing(totalLen, 8);
+  let xSvg = '';
+  for(let d = 0; d <= totalLen+1e-6; d += xStep){
+    const dd = Math.min(d, totalLen), x = X(dd);
+    xSvg += '<line x1="'+x.toFixed(1)+'" y1="'+PT+'" x2="'+x.toFixed(1)+'" y2="'+(h-PB)+'" stroke="#eef0f6" stroke-width="1" stroke-dasharray="2,2"/>' +
+      '<text x="'+x.toFixed(1)+'" y="'+(h-PB+13).toFixed(1)+'" font-size="9" fill="#6b7080" text-anchor="middle">'+fmtStation(dd)+'</text>';
+  }
+  let groundPath = '';
+  prof.forEach(p => { if(p.elev==null) return; groundPath += (groundPath?'L':'M')+X(p.dist).toFixed(1)+','+Y(p.elev).toFixed(1)+' '; });
+  const areaPath = groundPath ? groundPath + 'L'+(w-pad.r).toFixed(1)+','+(h-PB)+' L'+pad.l.toFixed(1)+','+(h-PB)+' Z' : '';
+
+  let gradeSvg = '';
+  if(designGrade){
+    let gPath = '';
+    const gStep = Math.max(totalLen/200, 0.5);
+    for(let d = 0; d <= totalLen+1e-6; d += gStep){
+      const dd = Math.min(d, totalLen);
+      gPath += (gPath?'L':'M')+X(dd).toFixed(1)+','+Y(designElevAt(dd)).toFixed(1)+' ';
+    }
+    gradeSvg = '<path d="'+gPath+'" fill="none" stroke="#e0483e" stroke-width="2" stroke-dasharray="7,4"/>';
+  }
+
+  return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'" xmlns="'+NS+'">' +
+    '<rect x="0" y="0" width="'+w+'" height="'+h+'" fill="#ffffff"/>' +
+    gridSvg + xSvg +
+    '<rect x="'+pad.l+'" y="'+PT+'" width="'+(w-pad.l-pad.r)+'" height="'+(h-PT-PB)+'" fill="none" stroke="#c7ccdb" stroke-width="1"/>' +
+    (areaPath ? '<path d="'+areaPath+'" fill="'+PALETTE.accent+'" fill-opacity="0.10"/>' : '') +
+    '<path d="'+groundPath+'" fill="none" stroke="'+PALETTE.accentDark+'" stroke-width="2.2"/>' +
+    gradeSvg +
+  '</svg>';
+}
+
+// The straightened "developed" plan strip for the Plan & Profile sheet: a per-column resample of
+// the real aerial imagery (not a single rigid image rotation), so the horizontal axis is exactly
+// cumulative station distance - the same value the profile chart below uses - for ANY route shape,
+// not just a dead-straight one. For each output column (a station), crossSectionFrame gives the
+// real centerline UTM position and perpendicular unit vector (the same geometry the Cross Section
+// feature already relies on); each output row is a lateral offset in metres from that centerline,
+// mapped back into the source image's own pixel space and sampled. Equivalent to how a pipeline/
+// road corridor "strip map" or a satellite ground-track image is built - a real, standard technique,
+// not a shortcut. The LIO ArcGIS server reflects back whatever Origin it's asked from (confirmed via
+// a real request), so this canvas never taints even loaded from a bare file:// page.
+async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalLen){
+  const epsg = 'EPSG:' + sr;
+  const valid2 = profile.filter(p => p.elev != null);
+  const utm2 = valid2.map(p => { const [x,y] = proj4('WGS84', epsg, [p.lon, p.lat]); return {x,y}; });
+  // Pad the fetched source extent from the ACTUAL half-width the strip will sample
+  // (ppPlanH/2 converted back to metres), not the nominal corridor-width setting - ppPlanH is
+  // clamped to a sane on-page range (120-320px), so for a long line at a fine scale the real
+  // sampled half-width can end up well beyond the nominal buffer, and padding from the nominal
+  // value alone left the fetched extent short at the corners (confirmed visually: a gray unsampled
+  // triangle at one edge until this was tied to the real half-width instead).
+  const actualHalfWidthM = (ppPlanH / 2) / ppScale;
+  const marginM = Math.max(actualHalfWidthM * 1.3, 25);
+  const sxmin = Math.min(...utm2.map(p=>p.x)) - marginM, sxmax = Math.max(...utm2.map(p=>p.x)) + marginM;
+  const symin = Math.min(...utm2.map(p=>p.y)) - marginM, symax = Math.max(...utm2.map(p=>p.y)) + marginM;
+  const srcMPerPx = 0.5;
+  let srcW = Math.max(64, Math.round((sxmax-sxmin)/srcMPerPx));
+  let srcH = Math.max(64, Math.round((symax-symin)/srcMPerPx));
+  const MAXSRC = 2048;
+  if(srcW > MAXSRC || srcH > MAXSRC){ const s = MAXSRC / Math.max(srcW, srcH); srcW = Math.round(srcW*s); srcH = Math.round(srcH*s); }
+  const srcUrl = AERIAL_URL + '/export?bbox='+sxmin+','+symin+','+sxmax+','+symax+'&bboxSR='+sr+'&imageSR='+sr+'&size='+srcW+','+srcH+'&format=jpg&f=image';
+  const img = await new Promise((resolve, reject) => {
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error('could not load aerial imagery for the straightened plan strip'));
+    im.src = srcUrl;
   });
-  if(!idMap.size) return;
-  svgEl.querySelectorAll('*').forEach(el => {
-    ['fill','stroke','filter','clip-path','mask'].forEach(attr => {
-      const val = el.getAttribute(attr);
-      if(!val) return;
-      idMap.forEach((newId, oldId) => {
-        if(val.includes('url(#'+oldId+')')) el.setAttribute(attr, val.split('url(#'+oldId+')').join('url(#'+newId+')'));
-      });
-    });
-  });
+  const srcCanvas = document.createElement('canvas');
+  srcCanvas.width = srcW; srcCanvas.height = srcH;
+  const sctx = srcCanvas.getContext('2d');
+  sctx.drawImage(img, 0, 0, srcW, srcH);
+  const srcData = sctx.getImageData(0, 0, srcW, srcH).data;
+
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = ppW; outCanvas.height = ppPlanH;
+  const octx = outCanvas.getContext('2d');
+  const outImg = octx.createImageData(ppW, ppPlanH);
+  const od = outImg.data;
+
+  for(let x = 0; x < ppW; x++){
+    const s = (x - ppPad.l) / ppScale;
+    const inRange = s >= -1e-6 && s <= totalLen + 1e-6;
+    const frame = inRange ? crossSectionFrame(Math.max(0, Math.min(totalLen, s))) : null;
+    for(let y = 0; y < ppPlanH; y++){
+      const idx = (y * ppW + x) * 4;
+      if(!frame){ od[idx]=240; od[idx+1]=240; od[idx+2]=244; od[idx+3]=255; continue; }
+      const offM = (y - ppPlanH/2) / ppScale;
+      const sux = frame.ux + frame.perpX*offM, suy = frame.uy + frame.perpZ*offM;
+      const sx = Math.round((sux - sxmin) / (sxmax - sxmin) * srcW);
+      const sy = Math.round((1 - (suy - symin) / (symax - symin)) * srcH);
+      if(sx < 0 || sy < 0 || sx >= srcW || sy >= srcH){ od[idx]=225; od[idx+1]=225; od[idx+2]=230; od[idx+3]=255; continue; }
+      const sIdx = (sy * srcW + sx) * 4;
+      od[idx] = srcData[sIdx]; od[idx+1] = srcData[sIdx+1]; od[idx+2] = srcData[sIdx+2]; od[idx+3] = 255;
+    }
+  }
+  octx.putImageData(outImg, 0, 0);
+  return outCanvas.toDataURL('image/jpeg', 0.9);
 }
 
 // Standard Ontario civil/OPSD-style title block - brand, project/client/drawing identity, and a
@@ -2346,12 +2446,43 @@ async function generatePdfReport(){
     const northArrowHtml = '<div class="pr-north-arrow"><svg width="14" height="16" viewBox="0 0 14 16" fill="none"><path d="M7 0L13 12H1L7 0Z" fill="#1a1a2e"/></svg>N</div>';
     const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
 
+    const totalLen = profile[profile.length-1].dist;
+
+    // Plan & Profile sheet - the plan strip straightened so its horizontal axis is exactly station
+    // distance (see buildStraightenedPlanImg), stacked directly above a matching full-extent profile
+    // chart at the identical w/pad/scale, with dashed match-lines tying the two together at round
+    // stations. Best-effort: a fetch failure here drops the sheet (with a note) rather than failing
+    // the whole report, matching the same resilience precedent as the cross-section fetches below.
+    const ppW = 860, ppPad = { l: 58, r: 16 }, ppProfileH = 220;
+    const ppScale = (ppW - ppPad.l - ppPad.r) / totalLen;
+    const ppBufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
+    const ppPlanH = Math.max(120, Math.min(320, Math.round(2 * ppBufferM * ppScale)));
+    let planImgDataUrl = null, planProfileError = null;
+    try{
+      planImgDataUrl = await buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalLen);
+    } catch(err){
+      planProfileError = err.message;
+    }
+    const profileSvg = buildStaticProfileSVG(profile, ppW, ppPad, ppProfileH);
+    const ppXStep = niceGridSpacing(totalLen, 8);
+    let ppMatchlines = '';
+    for(let d = 0; d <= totalLen + 1e-6; d += ppXStep){
+      const dd = Math.min(d, totalLen);
+      const x = (ppPad.l + dd/totalLen*(ppW-ppPad.l-ppPad.r)).toFixed(1);
+      ppMatchlines += '<line x1="'+x+'" y1="0" x2="'+x+'" y2="'+ppPlanH+'" stroke="#ffffff" stroke-width="2.4" stroke-dasharray="1,4"/>' +
+        '<line x1="'+x+'" y1="0" x2="'+x+'" y2="'+ppPlanH+'" stroke="#1a1a2e" stroke-width="1" stroke-dasharray="1,4"/>' +
+        '<text x="'+x+'" y="'+(ppPlanH-5)+'" font-size="8.5" font-weight="700" fill="#1a1a2e" text-anchor="middle" style="paint-order:stroke;stroke:#fff;stroke-width:2.5px;">'+fmtStation(dd)+'</text>';
+    }
+    const ppMatchSvg = '<svg class="pr-pp-matchlines" viewBox="0 0 '+ppW+' '+(ppPlanH+ppProfileH)+'">' + ppMatchlines + '</svg>';
+    const ppPlanContent = planImgDataUrl
+      ? '<img src="'+planImgDataUrl+'">'
+      : '<div style="padding:16px;font-size:11px;color:#9599a8;">Plan strip unavailable' + (planProfileError ? ' (' + escHtml(planProfileError) + ')' : '') + '.</div>';
+
     // Cross-sections - either at the deepest cut/fill stations (default) or at a fixed interval the
     // user chooses (prXsInterval), paginated across as many sheets as needed. Fetched fresh so the
     // report is self-contained regardless of whether the Cross Section panel had anything open.
     let xsCards = [], xsIntervalLabel = '';
     if(designGrade){
-      const totalLen = profile[profile.length-1].dist;
       const intervalM = parseFloat(document.getElementById('prXsInterval').value);
       const useInterval = intervalM > 0;
       let stationDists;
@@ -2386,17 +2517,14 @@ async function generatePdfReport(){
     const CARDS_PER_SHEET = 6; // 2 cols x 3 rows fits one Letter sheet at this card aspect ratio
     const xsSheetGroups = [];
     for(let i=0; i<xsCards.length; i+=CARDS_PER_SHEET) xsSheetGroups.push(xsCards.slice(i, i+CARDS_PER_SHEET));
-    const totalSheets = 2 + xsSheetGroups.length;
+    const totalSheets = 3 + xsSheetGroups.length;
 
-    // Clones keep their source id attributes, which would collide with the live #statsGrid/#cutFillStats/
-    // chart svg once inserted into #printReport (which sits before #main in the document) - getElementById
-    // and url(#id) both resolve to the first match in document order, so an un-stripped clone would silently
-    // steal every future lookup of the live element for the rest of the session.
+    // Clones keep their source id attributes, which would collide with the live #statsGrid/#cutFillStats
+    // once inserted into #printReport (which sits before #main in the document) - getElementById
+    // resolves to the first match in document order, so an un-stripped clone would silently steal
+    // every future lookup of the live element for the rest of the session.
     const statsClone = document.getElementById('statsGrid').cloneNode(true);
     statsClone.removeAttribute('id');
-    const chartSvgEl = document.querySelector('#chartWrap svg');
-    const chartClone = chartSvgEl ? chartSvgEl.cloneNode(true) : null;
-    if(chartClone) localizeClonedSvgIds(chartClone, '-print');
     let cutFillHtml = '';
     if(designGrade){
       const cutFillClone = document.getElementById('cutFillStats').cloneNode(true);
@@ -2406,7 +2534,7 @@ async function generatePdfReport(){
     const attribution = 'Ground elevation: Ontario LiDAR DTM (Land Information Ontario), 0.5m resolution. Aerial imagery: Ontario Orthophotography (LIO). Vertical datum CGVD2013, horizontal WGS84. Generated by Contour.';
 
     // One .pr-page per sheet - each a bordered drawing frame with its own title block (standard
-    // multi-sheet drawing-set convention), rather than one long continuously-flowing page. Sheets 3+
+    // multi-sheet drawing-set convention), rather than one long continuously-flowing page. Sheets 4+
     // (cross-sections) only exist when there's a design grade to have stations from, and there can
     // be more than one of them once an interval produces more cards than fit on a single sheet.
     const sheet1 =
@@ -2414,23 +2542,33 @@ async function generatePdfReport(){
         '<div class="pr-sheet-title">Location Plan<span class="pr-sheet-sub">Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</span></div>' +
         '<div class="pr-sheet-content">' +
           '<div class="pr-map-wrap"><img id="prMapImg" src="'+mapImgUrl+'">' + mapOverlaySvg + northArrowHtml + scaleBarHtml + '</div>' +
-          '<div class="pr-section-title">Profile Summary</div>' +
-          statsClone.outerHTML +
         '</div>' +
         '<div class="pr-footer">' + attribution + '</div>' +
         buildTitleBlock('Location Plan', 1, totalSheets) +
       '</div>';
     const sheet2 =
       '<div class="pr-page">' +
-        '<div class="pr-sheet-title">Elevation Profile' + (designGrade ? '<span class="pr-sheet-sub">With Design Grade &amp; Cut/Fill</span>' : '') + '</div>' +
+        '<div class="pr-sheet-title">Plan &amp; Profile<span class="pr-sheet-sub">Straightened Alignment · Stations Aligned</span></div>' +
         '<div class="pr-sheet-content">' +
-          '<div class="pr-chart-wrap">' + (chartClone ? chartClone.outerHTML : '<p>No chart available.</p>') + '</div>' +
+          '<div class="pr-pp-wrap">' +
+            '<div class="pr-pp-plan">' + ppPlanContent + '<div class="pr-pp-note">Plan straightened along the alignment - see Location Plan (Sheet 1) for true north orientation. Corridor shown ±' + fmtDist(ppBufferM) + '.</div></div>' +
+            '<div class="pr-pp-profile">' + profileSvg + '</div>' +
+            ppMatchSvg +
+          '</div>' +
+        '</div>' +
+        buildTitleBlock('Plan & Profile', 2, totalSheets) +
+      '</div>';
+    const sheet3 =
+      '<div class="pr-page">' +
+        '<div class="pr-sheet-title">Profile Summary' + (designGrade ? '<span class="pr-sheet-sub">With Design Grade &amp; Cut/Fill</span>' : '') + '</div>' +
+        '<div class="pr-sheet-content">' +
+          statsClone.outerHTML +
           cutFillHtml +
         '</div>' +
-        buildTitleBlock('Elevation Profile', 2, totalSheets) +
+        buildTitleBlock('Profile Summary', 3, totalSheets) +
       '</div>';
     const xsSheets = xsSheetGroups.map((cards, idx) => {
-      const sheetNum = 3 + idx;
+      const sheetNum = 4 + idx;
       const subLabel = xsSheetGroups.length > 1 ? (xsIntervalLabel + ' · Sheet ' + (idx+1) + ' of ' + xsSheetGroups.length) : xsIntervalLabel;
       return '<div class="pr-page">' +
         '<div class="pr-sheet-title">Cross Sections<span class="pr-sheet-sub">' + subLabel + '</span></div>' +
@@ -2440,7 +2578,7 @@ async function generatePdfReport(){
     }).join('');
 
     const container = document.getElementById('printReport');
-    container.innerHTML = sheet1 + sheet2 + xsSheets;
+    container.innerHTML = sheet1 + sheet2 + sheet3 + xsSheets;
 
     const img = document.getElementById('prMapImg');
     if(img && !img.complete){
