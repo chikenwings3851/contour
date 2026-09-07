@@ -499,6 +499,7 @@
   }
   #view3dStatus.hidden{display:none;}
   .xs-panel{width:min(700px,92vw);top:100px;left:96px;}
+  .grade-panel{width:min(400px,92vw);top:120px;left:120px;overflow-y:auto;}
   .xs-status{font-size:12.5px;color:var(--text-dim);margin-bottom:10px;}
   .xs-status.err{color:var(--danger);}
   .xs-chart-wrap{
@@ -738,7 +739,38 @@
           Add Design Grade
         </button>
       </div>
-      <div id="gradeEditor" style="display:none;">
+      <!-- Active state is deliberately just a glance summary + entry point, not the full editor -
+           editing now happens in the floating Design Grade panel, opened tiled next to the
+           Elevation Profile so the chart and the inputs that shape it are always visible together
+           (see openGradeModal/btnEditGrade). -->
+      <div id="gradeActiveSidebar" style="display:none;">
+        <div class="color-legend">
+          <span class="legend-item"><span class="legend-dot" style="background:var(--accent-dark)"></span>Ground</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#c2660a"></span>Design</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#e0483e"></span>Cut</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#0d9f6e"></span>Fill</span>
+        </div>
+        <div class="datum-note" id="gradeSidebarSummary" style="margin:6px 0 10px;"></div>
+        <button id="btnEditGrade" class="primary" style="width:100%;justify-content:center;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 3H3v6M15 3h6v6M9 21H3v-6M15 21h6v-6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Edit Design Grade
+        </button>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="gradeModal">
+      <div class="modal-panel grade-panel">
+        <div class="modal-head" id="gradeDragHandle">
+          <h3>
+            <svg class="drag-dots" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.6"/><circle cx="16" cy="6" r="1.6"/><circle cx="8" cy="12" r="1.6"/><circle cx="16" cy="12" r="1.6"/><circle cx="8" cy="18" r="1.6"/><circle cx="16" cy="18" r="1.6"/></svg>
+            Design Grade
+          </h3>
+          <div class="modal-head-right">
+            <button id="btnCloseGrade" class="icon-btn">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </div>
         <div class="color-legend">
           <span class="legend-item"><span class="legend-dot" style="background:var(--accent-dark)"></span>Ground</span>
           <span class="legend-item"><span class="legend-dot" style="background:#c2660a"></span>Design</span>
@@ -762,6 +794,7 @@
         </div>
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
         <div class="datum-note" id="cutFillPrecisionNote"></div>
+        <div class="resize-handle" id="gradeResizeHandle" title="Drag to resize"></div>
       </div>
     </div>
 
@@ -1513,6 +1546,7 @@ function resetAll(){
   closeModal();
   closeView3D();
   closeCrossSectionModal();
+  closeGradeModal();
   // xsCurrentStationDist now drives the persistent sidebar card too (not just the popup, which is
   // all closeCrossSectionModal() itself still knows about), so a full profile reset - not just
   // closing the popup - is the right place to actually clear it and pull the map slider off.
@@ -1528,7 +1562,7 @@ function resetAll(){
   document.getElementById('xsSidebarStatus').innerHTML = '';
   designGrade = null;
   document.getElementById('gradeEmptyState').style.display = '';
-  document.getElementById('gradeEditor').style.display = 'none';
+  document.getElementById('gradeActiveSidebar').style.display = 'none';
   btnDraw.classList.remove('active');
   btnUndo.disabled = true;
   btnFinish.disabled = true;
@@ -1970,7 +2004,7 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
       designGrade = data.designGrade;
       designGradeNextId = Math.max(1, ...designGrade.points.map(p => (p.id||0) + 1));
       document.getElementById('gradeEmptyState').style.display = 'none';
-      document.getElementById('gradeEditor').style.display = '';
+      document.getElementById('gradeActiveSidebar').style.display = '';
       renderGradeEditor();
     }
 
@@ -3172,6 +3206,7 @@ async function applyTerrainMaterial(mode){
 // else, so a flaky server response here degrades the same honest way it does elsewhere.
 
 makeDraggable(document.querySelector('.xs-panel'), document.getElementById('xsDragHandle'));
+makeDraggable(document.querySelector('.grade-panel'), document.getElementById('gradeDragHandle'));
 
 let xsOpen = false, xsStations = [];
 let xsCurrentStationDist = null, xsStationMapMarker = null; // "which cross-section am I on" highlight, shown on both the map and the elevation chart
@@ -4105,14 +4140,23 @@ document.getElementById('btnAddGrade').addEventListener('click', () => {
     { id: designGradeNextId++, dist: valid[valid.length-1].dist, elev: valid[valid.length-1].elev }
   ]};
   document.getElementById('gradeEmptyState').style.display = 'none';
-  document.getElementById('gradeEditor').style.display = '';
+  document.getElementById('gradeActiveSidebar').style.display = '';
   renderGradeEditor();
   refreshChart();
+  // Shaping a grade and seeing its effect on the real profile should go hand in hand - open both
+  // tiled together immediately rather than leaving the profile small in the sidebar.
+  openChartModal();
+  openGradeModal();
+});
+document.getElementById('btnEditGrade').addEventListener('click', () => {
+  openChartModal();
+  openGradeModal();
 });
 document.getElementById('btnRemoveGrade').addEventListener('click', () => {
   designGrade = null;
   document.getElementById('gradeEmptyState').style.display = '';
-  document.getElementById('gradeEditor').style.display = 'none';
+  document.getElementById('gradeActiveSidebar').style.display = 'none';
+  closeGradeModal();
   refreshChart();
   refreshDesignOverlay3DIfOpen();
 });
@@ -4194,6 +4238,10 @@ function renderGradeEditor(){
 function renderCutFillStats(){
   if(!designGrade) return;
   const { cutVolume, fillVolume, maxCut, maxFill, precise } = computeCutFillStats();
+  // Cheap glance summary in the sidebar (which no longer holds the full editor) so the headline
+  // numbers are visible without opening the Design Grade panel at all.
+  const summaryEl = document.getElementById('gradeSidebarSummary');
+  if(summaryEl) summaryEl.textContent = 'Cut ' + volumeStr(cutVolume) + ' · Fill ' + volumeStr(fillVolume) + (precise ? ' (precise)' : ' (est.)');
   document.getElementById('cutFillStats').innerHTML =
     '<div class="stat hero cut"><div class="label">Total Cut ' + (precise?'· precise':'· est.') + '</div><div class="value">' + volumeStr(cutVolume) + '</div></div>' +
     '<div class="stat hero fillvol"><div class="label">Total Fill ' + (precise?'· precise':'· est.') + '</div><div class="value">' + volumeStr(fillVolume) + '</div></div>' +
@@ -4718,6 +4766,28 @@ document.addEventListener('keydown', (e) => {
     statusEl.innerHTML = 'Draw cancelled. ' + IDLE_STATUS;
   }
 });
+
+// ---------- design grade panel ----------
+// Opens tiled next to the Elevation Profile (openChartModal) rather than as a standalone popup -
+// Max's own ask was that shaping a grade and seeing its effect on the real profile "should go hand
+// in hand", so both open together from one entry point (btnAddGrade / btnEditGrade) instead of
+// the profile staying small in the sidebar while the editor lived below it.
+let gradeOpen = false;
+function openGradeModal(){
+  if(!designGrade) return;
+  gradeOpen = true;
+  document.getElementById('gradeModal').style.display = 'block';
+  bringToFront(document.querySelector('.grade-panel'));
+  layoutPanels();
+  renderGradeEditor();
+}
+function closeGradeModal(){
+  gradeOpen = false;
+  document.getElementById('gradeModal').style.display = 'none';
+  layoutPanels();
+}
+document.getElementById('btnCloseGrade').addEventListener('click', closeGradeModal);
+document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && gradeOpen) closeGradeModal(); });
 function closeModal(){
   modalOpen = false;
   document.getElementById('chartModal').style.display = 'none';
@@ -4822,6 +4892,7 @@ makeResizable(document.querySelector('#chartModal .modal-panel'), document.getEl
 makeResizable(document.querySelector('.xs-panel'), document.getElementById('xsResizeHandle'), () => {
   if(lastXsPoints && xsCurrentStationDist != null) renderCrossSectionChart(lastXsPoints, xsCurrentStationDist);
 });
+makeResizable(document.querySelector('.grade-panel'), document.getElementById('gradeResizeHandle'), null);
 
 // ---------- floating panel tiling ----------
 // Elevation Profile (expand), 3D Terrain, and Cross Section - a future Grade Editor panel would
@@ -4838,6 +4909,7 @@ function getTilePanels(){
   const list = [
     { key:'view3d', el: document.querySelector('.view3d-panel'), open: () => view3dOpen },
     { key:'chart',  el: document.querySelector('#chartModal .modal-panel'), open: () => modalOpen },
+    { key:'grade',  el: document.querySelector('.grade-panel'), open: () => gradeOpen },
     { key:'xs',     el: document.querySelector('.xs-panel'), open: () => xsOpen }
   ];
   return list.filter(p => p.open());
