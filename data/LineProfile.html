@@ -567,7 +567,7 @@
         </button>
       </div>
       <div class="row" style="margin-top:10px;">
-        <select id="dxfZone">
+        <select id="dxfZone" title="UTM zone to interpret the imported DXF file's coordinates in">
           <option value="26917">UTM Zone 17N (NAD83)</option>
           <option value="26918">UTM Zone 18N (NAD83)</option>
         </select>
@@ -714,6 +714,32 @@
       </div>
     </div>
 
+    <div class="card" id="corridorViewCard" style="display:none;">
+      <h2>Corridor &amp; 3D View</h2>
+      <div class="datum-note" style="margin:2px 0 10px;">Buffer width for the 3D terrain, Cross Section, and the GeoTIFF export below.</div>
+      <div class="row">
+        <select id="corridorWidth" title="Buffer distance either side of the line" style="width:100%;">
+          <option value="10">±10m corridor</option>
+          <option value="20" selected>±20m corridor</option>
+          <option value="50">±50m corridor</option>
+        </select>
+      </div>
+      <button id="btnView3D" class="primary btn-3d-large">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        View Corridor in 3D
+      </button>
+      <button id="btnOpenAllViews" style="width:100%;justify-content:center;margin-top:8px;" title="Opens 3D Terrain, Cross Section, and the Elevation Profile together, tiled side by side">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="9" height="18" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="3" width="7" height="8" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="13" width="7" height="8" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg>
+        Open All Views
+      </button>
+      <div class="row" style="margin-top:10px;">
+        <button id="btnExportCorridor" style="width:100%;justify-content:center;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 15l5-5 4 4 5-6 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          Export LiDAR Corridor (GeoTIFF)
+        </button>
+      </div>
+    </div>
+
     <div class="card" id="surveyCard" style="display:none;">
       <div class="card-head collapsible">
         <h2>LiDAR Survey Coverage</h2>
@@ -735,30 +761,11 @@
         </button>
       </div>
       <div class="row" style="margin-top:10px;">
-        <select id="corridorWidth" title="Buffer distance either side of the line">
-          <option value="10">±10m corridor</option>
-          <option value="20" selected>±20m corridor</option>
-          <option value="50">±50m corridor</option>
-        </select>
-        <button id="btnExportCorridor">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 15l5-5 4 4 5-6 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          Export LiDAR Corridor (GeoTIFF)
-        </button>
-      </div>
-      <div class="row" style="margin-top:10px;">
         <button id="btnPrintReport" style="width:100%;justify-content:center;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9V3h12v6M6 18H4a1 1 0 01-1-1v-5a1 1 0 011-1h16a1 1 0 011 1v5a1 1 0 01-1 1h-2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><rect x="6" y="14" width="12" height="7" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Print / Save as PDF Report
         </button>
       </div>
-      <button id="btnView3D" class="primary btn-3d-large">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>
-        View Corridor in 3D
-      </button>
-      <button id="btnOpenAllViews" style="width:100%;justify-content:center;margin-top:8px;" title="Opens 3D Terrain, Cross Section, and the Elevation Profile together, tiled side by side">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="9" height="18" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="3" width="7" height="8" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="13" width="7" height="8" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg>
-        Open All Views
-      </button>
     </div>
 
     <div class="card collapsed" id="sourcesCard">
@@ -1403,6 +1410,7 @@ function resetAll(){
   document.getElementById('gradeCard').style.display = 'none';
   document.getElementById('surveyCard').style.display = 'none';
   document.getElementById('exportCard').style.display = 'none';
+  document.getElementById('corridorViewCard').style.display = 'none';
   document.getElementById('btnSaveProject').disabled = true;
   document.getElementById('chartWrap').querySelectorAll('svg').forEach(n=>n.remove());
 }
@@ -1576,6 +1584,7 @@ function finalizeProfile(length, myRequestId, statusHtml){
   renderStats(profile, length);
   refreshChart();
   document.getElementById('exportCard').style.display = '';
+  document.getElementById('corridorViewCard').style.display = '';
   document.getElementById('gradeCard').style.display = '';
   document.getElementById('xsSidebarCard').style.display = '';
   buildXsStationList();
