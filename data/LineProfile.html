@@ -4721,25 +4721,30 @@ function layoutPanels(){
   }
   if(panels.length === 1){
     place(panels[0].el, areaX, areaY, areaW, areaH);
-    return;
+  } else {
+    // First panel in the (priority-ordered) open list takes a wide primary column; the rest split
+    // the remaining column evenly by height. With just two panels open this degenerates to a clean
+    // side-by-side split, which is exactly what's wanted there too.
+    const primaryW = Math.round(areaW * 0.58);
+    const secondaryW = areaW - primaryW - TILE_GAP;
+    place(panels[0].el, areaX, areaY, primaryW, areaH);
+    const rest = panels.slice(1);
+    const secX = areaX + primaryW + TILE_GAP;
+    const eachH = (areaH - TILE_GAP * (rest.length - 1)) / rest.length;
+    rest.forEach((p, i) => {
+      const y = Math.round(areaY + i * (eachH + TILE_GAP));
+      place(p.el, secX, y, secondaryW, Math.round(eachH));
+    });
   }
-  // First panel in the (priority-ordered) open list takes a wide primary column; the rest split
-  // the remaining column evenly by height. With just two panels open this degenerates to a clean
-  // side-by-side split, which is exactly what's wanted there too.
-  const primaryW = Math.round(areaW * 0.58);
-  const secondaryW = areaW - primaryW - TILE_GAP;
-  place(panels[0].el, areaX, areaY, primaryW, areaH);
-  const rest = panels.slice(1);
-  const secX = areaX + primaryW + TILE_GAP;
-  const eachH = (areaH - TILE_GAP * (rest.length - 1)) / rest.length;
-  rest.forEach((p, i) => {
-    const y = Math.round(areaY + i * (eachH + TILE_GAP));
-    place(p.el, secX, y, secondaryW, Math.round(eachH));
-  });
   // Placing panels above only changes CSS position/size - the Three.js renderer keeps its old
   // resolution/aspect ratio until told to remeasure, so a later panel open/close that shrinks or
   // grows the 3D panel (not just its own initial open) needs to explicitly re-fit it or the scene
-  // renders stretched to the new box instead of correctly reframed.
+  // renders stretched to the new box instead of correctly reframed. This used to sit after an early
+  // `return` in the single-panel branch above, so it silently never ran the moment 3D became the
+  // only panel left open (e.g. closing both Profile and Cross Section while 3D stayed open) -
+  // the renderer's backing buffer stayed at its old resolution while the canvas's on-screen CSS
+  // size grew to fill the newly-full-width panel, and the browser stretched the smaller rendered
+  // image to fit, exactly the "stretches out and looks weird" Max reported.
   if(panels.some(p => p.key === 'view3d')) resizeView3D();
 }
 window.addEventListener('resize', () => { if(getTilePanels().length) layoutPanels(); });
