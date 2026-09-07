@@ -657,6 +657,9 @@
         <button id="xsSidebarPrev" class="icon-btn">‹</button>
         <select id="xsSidebarStationSelect" class="xs-station-select"></select>
         <button id="xsSidebarNext" class="icon-btn">›</button>
+        <button id="btnAddXsStation" class="icon-btn" title="Add a custom station here">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
       </div>
       <div id="xsSidebarStatus" class="xs-status"></div>
       <div id="xsSidebarChartWrap" class="xs-chart-wrap">
@@ -899,6 +902,9 @@
         <button id="xsPrev" class="icon-btn">‹</button>
         <select id="xsStationSelect" class="xs-station-select"></select>
         <button id="xsNext" class="icon-btn">›</button>
+        <button id="btnAddXsStationPopup" class="icon-btn" title="Add a custom station here">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
         <button id="btnCloseXs" class="icon-btn">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
@@ -908,7 +914,7 @@
     <div id="xsChartWrap" class="xs-chart-wrap">
       <div class="chart-tooltip" id="xsChartTooltip"></div>
     </div>
-    <div class="datum-note">The alignment (your drawn line) sits at the centre (0m) — negative is left, positive is right, facing along the direction you drew it.</div>
+    <div class="datum-note">The alignment (your drawn line) sits at the centre (0m) — negative is left, positive is right, facing along the direction you drew it. Scroll to zoom, drag to pan.</div>
     <div class="resize-handle" id="xsResizeHandle" title="Drag to resize"></div>
   </div>
 </div>
@@ -1369,9 +1375,11 @@ function resetAll(){
   // all closeCrossSectionModal() itself still knows about), so a full profile reset - not just
   // closing the popup - is the right place to actually clear it and pull the map slider off.
   xsCurrentStationDist = null;
+  xsChartXView = null;
   if(xsStationMapMarker){ map.removeLayer(xsStationMapMarker); xsStationMapMarker = null; }
   if(xsSectionLine){ map.removeLayer(xsSectionLine); xsSectionLine = null; }
   xsStations = [];
+  xsCustomStations = [];
   document.getElementById('xsSidebarCard').style.display = 'none';
   document.getElementById('xsSidebarChartWrap').querySelectorAll('svg').forEach(n => n.remove());
   document.getElementById('xsSidebarStationSelect').innerHTML = '';
@@ -2260,6 +2268,7 @@ let view3dMeasureGroup = null, stationsVisible3d = true;
 let view3dLineGroup = null, lineVisible3d = true;
 let view3dGradeGroup = null; // the design grade line + cut/fill stakes, shown whenever designGrade is active
 let view3dChannelGroup = null, channelVisible3d = true; // the lofted trapezoidal channel/embankment solid
+let view3dXsSectionGroup = null; // the faint corridor-width reference line at the current Cross Section station, mirroring the map's own xsSectionLine
 let view3dMoveState = {}; // live keys-held state for WASD/arrow-key fly movement, read every render frame
 let view3dSceneRadius = 0, view3dMeanElev = 0; // cached from the last full terrain rebuild, reused for fly speed and for cheap design-overlay-only refreshes
 
@@ -2539,11 +2548,7 @@ function rebuildTerrainGeometry(ve){
   view3dSceneRadius = sphere.radius; // used to scale WASD/arrow fly-through speed to this corridor's real size
   view3dMeanElev = meanElev;
 
-  if(view3dMeasureGroup){ disposeGroup3D(view3dMeasureGroup); view3dScene.remove(view3dMeasureGroup); view3dMeasureGroup = null; }
-  if(stationsVisible3d){
-    view3dMeasureGroup = buildStationMarkers3D(ve, meanElev);
-    if(view3dMeasureGroup) view3dScene.add(view3dMeasureGroup);
-  }
+  updateStationMarkers3D(ve, meanElev);
 
   if(view3dLineGroup){ disposeGroup3D(view3dLineGroup); view3dScene.remove(view3dLineGroup); view3dLineGroup = null; }
   if(lineVisible3d){
@@ -2552,6 +2557,22 @@ function rebuildTerrainGeometry(ve){
   }
 
   updateDesignOverlay3D(ve, meanElev);
+  updateXsSectionLine3D(ve, meanElev);
+}
+
+// Split out of rebuildTerrainGeometry() so a station-list change alone (adding a custom station)
+// doesn't need a full multi-hundred-thousand-vertex terrain rebuild just to show one new marker -
+// same reasoning as updateDesignOverlay3D being split out for live grade edits.
+function updateStationMarkers3D(ve, meanElev){
+  if(view3dMeasureGroup){ disposeGroup3D(view3dMeasureGroup); view3dScene.remove(view3dMeasureGroup); view3dMeasureGroup = null; }
+  if(stationsVisible3d){
+    view3dMeasureGroup = buildStationMarkers3D(ve, meanElev);
+    if(view3dMeasureGroup) view3dScene.add(view3dMeasureGroup);
+  }
+}
+function refreshStationMarkers3DIfOpen(){
+  if(!view3dOpen || !view3dGridInfo || !view3dMesh) return;
+  updateStationMarkers3D(parseFloat(document.getElementById('ve3d').value), view3dMeanElev);
 }
 
 // Rebuilds only the design-grade line/stakes + the proposed channel solid, without touching the
@@ -2583,6 +2604,54 @@ function updateDesignOverlay3D(ve, meanElev){
 function refreshDesignOverlay3DIfOpen(){
   if(!view3dOpen || !view3dGridInfo || !view3dMesh) return;
   updateDesignOverlay3D(parseFloat(document.getElementById('ve3d').value), view3dMeanElev);
+}
+
+function updateXsSectionLine3D(ve, meanElev){
+  if(view3dXsSectionGroup){ disposeGroup3D(view3dXsSectionGroup); view3dScene.remove(view3dXsSectionGroup); view3dXsSectionGroup = null; }
+  view3dXsSectionGroup = buildXsSectionLine3D(ve, meanElev);
+  if(view3dXsSectionGroup) view3dScene.add(view3dXsSectionGroup);
+}
+// Called from updateXsSectionLine() (the map version - see crossSectionFrame's own comment) every
+// time the Cross Section station changes or the map slider is dragged, so the 3D line tracks the
+// map's line 1:1; a no-op whenever 3D isn't open.
+function refreshXsSectionLine3DIfOpen(){
+  if(!view3dOpen || !view3dGridInfo || !view3dMesh) return;
+  updateXsSectionLine3D(parseFloat(document.getElementById('ve3d').value), view3dMeanElev);
+}
+
+// The same faint corridor-width reference line shown on the map (updateXsSectionLine), draped onto
+// the real terrain instead - samples real ground elevation from the already-fetched corridor grid
+// (gridElevAtLocal, no network call) at several points across the width, via the exact same
+// perpendicular frame (crossSectionFrame) the actual chart fetch uses, so this lines up with both
+// the map line and the real cross-section data. Broken into separate segments across any NoData
+// gap (same flush() pattern as buildLineOverlay3D) rather than drawing a straight line across it.
+function buildXsSectionLine3D(ve, meanElev){
+  if(xsCurrentStationDist == null) return null;
+  const frame = crossSectionFrame(xsCurrentStationDist);
+  if(!frame) return null;
+  const bufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
+  const { ux, uy, perpX, perpZ } = frame;
+  const STEPS = 24;
+  const mat = new THREE.LineBasicMaterial({ color: 0x7c3aed });
+  const group = new THREE.Group();
+  let current = [];
+  function flush(){
+    if(current.length >= 6){
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(current, 3));
+      group.add(new THREE.Line(geom, mat));
+    }
+    current = [];
+  }
+  for(let i = 0; i <= STEPS; i++){
+    const t = -bufferM + (2*bufferM) * (i/STEPS);
+    const { x, z } = utmToLocal3D(ux + perpX*t, uy + perpZ*t);
+    const g = gridElevAtLocal(x, z);
+    if(g == null){ flush(); continue; }
+    current.push(x, (g - meanElev) * ve + Math.max(ve * 0.3, 0.6), z);
+  }
+  flush();
+  return group.children.length ? group : null;
 }
 
 function disposeGroup3D(group){
@@ -2703,17 +2772,21 @@ function hide3DHoverPoint(){
 // same convention and spacing style as the 2D chart's hover tooltip - a short perpendicular tick
 // plus a chainage label at each interval, not a separate ground-reference grid.
 function buildStationMarkers3D(ve, meanElev){
-  if(!profile || profile.length < 2 || !view3dGridInfo) return null;
+  if(!profile || profile.length < 2 || !view3dGridInfo || !xsStations.length) return null;
   const totalLen = profile[profile.length-1].dist;
   if(totalLen <= 0) return null;
-  const interval = niceGridSpacing(totalLen, 15);
+  const interval = niceGridSpacing(totalLen, 15); // still used for tick length/label sizing/tangent step - not for spacing itself, that's xsStations now
   const epsg = 'EPSG:' + view3dGridInfo.sr;
   const group = new THREE.Group();
   const tickMat = new THREE.LineBasicMaterial({ color: 0xffd23f });
+  const tickMatCustom = new THREE.LineBasicMaterial({ color: 0x7c3aed }); // matches the custom-station star in the dropdowns and the Cross Section slider's own color
   const microStep = Math.max(interval * 0.05, 0.5);
 
-  for(let d = 0; d <= totalLen + 1e-6; d += interval){
-    const dd = Math.min(d, totalLen);
+  // Reads xsStations directly (auto-spaced + any user-added custom ones merged in by
+  // applyXsStationList) rather than re-deriving its own even spacing, so a custom station shows up
+  // here too instead of only in the Cross Section dropdowns.
+  for(const dd of xsStations){
+    const isCustom = xsCustomStations.some(c => Math.abs(c-dd) < 0.01);
     const p = profilePointAtDist(dd);
     if(!p) continue;
     const [ux, uy] = proj4('WGS84', epsg, [p.lon, p.lat]);
@@ -2740,7 +2813,7 @@ function buildStationMarkers3D(ve, meanElev){
       x-perpX*tickLen, y, z-perpZ*tickLen,
       x+perpX*tickLen, y, z+perpZ*tickLen
     ], 3));
-    group.add(new THREE.Line(geom, tickMat));
+    group.add(new THREE.Line(geom, isCustom ? tickMatCustom : tickMat));
 
     const label = makeMeasurementSprite3D(fmtStation(dd), fmtElev(p.elev));
     const labelSize = Math.max(interval * 0.9, 3);
@@ -2969,6 +3042,8 @@ document.getElementById('xsSidebarStationSelect').addEventListener('change', (e)
 document.getElementById('xsSidebarPrev').addEventListener('click', () => stepStation(-1));
 document.getElementById('xsSidebarNext').addEventListener('click', () => stepStation(1));
 document.getElementById('btnExpandXs').addEventListener('click', () => openCrossSectionModal());
+document.getElementById('btnAddXsStation').addEventListener('click', () => addCustomStation(xsCurrentStationDist));
+document.getElementById('btnAddXsStationPopup').addEventListener('click', () => addCustomStation(xsCurrentStationDist));
 document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && xsOpen) closeCrossSectionModal(); });
 
 function closeCrossSectionModal(){
@@ -3003,6 +3078,7 @@ function updateXsSectionLine(stationDist){
   } else {
     xsSectionLine.setLatLngs(latlngs);
   }
+  refreshXsSectionLine3DIfOpen();
 }
 
 // Marks, on both the map and the main elevation chart, exactly which station the Cross Section
@@ -3049,19 +3125,59 @@ function updateXsHighlight(){
   }
 }
 
-// Builds the station list once (from the finished profile, independent of whether 3D has ever
-// been opened - crossSectionFrame/fetchCrossSection derive their own UTM zone) and populates both
-// the sidebar card's and the popup's dropdowns from the identical list, so they can never disagree
-// on what stations exist. Called once when a profile finishes building; the station list itself
-// doesn't change afterward (only the per-station fetch width, read live from corridorWidth).
-function buildXsStationList(){
+// User-added stations at arbitrary chainages, on top of the auto-spaced ones - persists across
+// buildXsStationList() calls (which only happens once per profile anyway) and gets merged back in
+// by applyXsStationList() every time the list is (re)built.
+let xsCustomStations = [];
+
+function computeAutoXsStations(){
   const totalLen = profile[profile.length-1].dist;
   const interval = niceGridSpacing(totalLen, 15);
+  const auto = [];
+  for(let d = 0; d <= totalLen + 1e-6; d += interval) auto.push(Math.min(d, totalLen));
+  return auto;
+}
+
+// Merges auto-spaced stations with any custom ones, sorts, de-duplicates near-identical entries
+// (a custom station added on or very near an existing one), and populates both the sidebar's and
+// the popup's dropdowns identically - the one place xsStations itself actually gets assigned, so
+// the two dropdowns and the 3D station markers (which now read xsStations directly) can never
+// disagree on what stations exist. Custom stations are marked with a star in the dropdown text.
+function applyXsStationList(autoStations){
+  const all = autoStations.concat(xsCustomStations).sort((a,b) => a-b);
   xsStations = [];
-  for(let d = 0; d <= totalLen + 1e-6; d += interval) xsStations.push(Math.min(d, totalLen));
-  const optionsHtml = xsStations.map(d => '<option value="' + d + '">' + fmtStation(d) + '</option>').join('');
+  for(const d of all){ if(!xsStations.length || d - xsStations[xsStations.length-1] > 0.01) xsStations.push(d); }
+  const optionsHtml = xsStations.map(d => {
+    const isCustom = xsCustomStations.some(c => Math.abs(c-d) < 0.01);
+    return '<option value="' + d + '">' + fmtStation(d) + (isCustom ? ' ★' : '') + '</option>';
+  }).join('');
   document.getElementById('xsStationSelect').innerHTML = optionsHtml;
   document.getElementById('xsSidebarStationSelect').innerHTML = optionsHtml;
+}
+
+// Builds the station list once (from the finished profile, independent of whether 3D has ever
+// been opened - crossSectionFrame/fetchCrossSection derive their own UTM zone). Called once when a
+// profile finishes building; the auto-spaced part doesn't change afterward (only the per-station
+// fetch width, read live from corridorWidth) - custom stations are added later via addCustomStation.
+function buildXsStationList(){
+  applyXsStationList(computeAutoXsStations());
+}
+
+// Adds a station at an arbitrary chainage (clamped to the line's real extent), in all views at
+// once - the dropdowns (sidebar + popup, tagged with a star), the 3D terrain's station markers
+// (buildStationMarkers3D reads xsStations directly), and jumps straight to it. Defaults to
+// wherever the map slider/current station already is - the natural "mark this exact spot" action.
+function addCustomStation(dist){
+  if(!profile || dist == null || isNaN(dist)) return;
+  const totalLen = profile[profile.length-1].dist;
+  dist = Math.max(0, Math.min(totalLen, dist));
+  if(!xsCustomStations.some(d => Math.abs(d-dist) < 0.01)){
+    xsCustomStations.push(dist);
+    applyXsStationList(computeAutoXsStations());
+    refreshStationMarkers3DIfOpen(); // no-op unless 3D is open; cheap - doesn't touch the terrain mesh itself
+  }
+  syncXsSelects(dist);
+  loadCrossSection(dist);
 }
 
 function openCrossSectionModal(){
@@ -3208,6 +3324,37 @@ async function loadCrossSection(stationDist){
   }
 }
 
+// Zoom/pan state for the Cross Section chart's offset axis - shared between the sidebar and popup
+// instances (mirroring how the Elevation Profile's chartXView is one shared value), so zooming
+// either one keeps both in sync via refreshXsCharts() rather than drifting independently.
+let xsChartXView = null; // null = full [fullMin,fullMax], else {min,max} in offset-metres
+let xsChartPanState = null;
+function currentXsRange(xsPts){
+  const fullMin = xsPts[0].offset, fullMax = xsPts[xsPts.length-1].offset;
+  if(!xsChartXView) return { xMin: fullMin, xMax: fullMax, fullMin, fullMax };
+  return { xMin: Math.max(fullMin, xsChartXView.min), xMax: Math.min(fullMax, xsChartXView.max), fullMin, fullMax };
+}
+// Re-renders whichever Cross Section instances are currently relevant from the last real fetch -
+// no network call, same "redraw from cache" pattern the resize-handle's onResizeEnd already uses.
+function refreshXsCharts(){
+  if(!lastXsPoints || xsCurrentStationDist == null) return;
+  renderCrossSectionChart(lastXsPoints, xsCurrentStationDist, document.getElementById('xsSidebarChartWrap'), document.getElementById('xsSidebarChartTooltip'));
+  if(xsOpen) renderCrossSectionChart(lastXsPoints, xsCurrentStationDist, document.getElementById('xsChartWrap'), document.getElementById('xsChartTooltip'));
+}
+document.addEventListener('mousemove', (ev) => {
+  if(!xsChartPanState) return;
+  const { startClientX, startMin, startMax, w, pad, fullMin, fullMax } = xsChartPanState;
+  const metersPerPx = (startMax - startMin) / (w - pad.l - pad.r);
+  const dO = (ev.clientX - startClientX) * metersPerPx;
+  let newMin = startMin - dO, newMax = startMax - dO;
+  if(newMin < fullMin){ newMax += (fullMin - newMin); newMin = fullMin; }
+  if(newMax > fullMax){ newMin -= (newMax - fullMax); newMax = fullMax; }
+  newMin = Math.max(fullMin, newMin);
+  xsChartXView = (newMin <= fullMin + 1e-6 && newMax >= fullMax - 1e-6) ? null : { min: newMin, max: newMax };
+  refreshXsCharts();
+});
+document.addEventListener('mouseup', () => { xsChartPanState = null; });
+
 function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
   const w = wrap.clientWidth || 640, h = 230;
   const pad = { l: 54, r: 16, t: 16, b: 30 };
@@ -3225,7 +3372,7 @@ function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
   }
   const span = Math.max(realMax - realMin, 0.5);
   const yMin = realMin - span*0.12, yMax = realMax + span*0.12;
-  const xMin = xsPoints[0].offset, xMax = xsPoints[xsPoints.length-1].offset;
+  const { xMin, xMax, fullMin, fullMax } = currentXsRange(xsPoints);
 
   const X = o => pad.l + (o - xMin) / (xMax - xMin) * (w - pad.l - pad.r);
   const Y = e => pad.t + (1 - (e - yMin) / (yMax - yMin)) * (h - pad.t - pad.b);
@@ -3376,6 +3523,33 @@ function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
     }
   });
   svg.addEventListener('mouseleave', () => { cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; hide3DHoverPoint(); });
+
+  // Mousewheel zoom (centred on the cursor's offset position) and click-drag pan across the
+  // corridor width - same mechanics as the Elevation Profile chart's own zoom/pan (currentXRange/
+  // chartPanState), just over the offset axis instead of distance-along-line, and re-rendering
+  // both Cross Section instances (refreshXsCharts) instead of just this one.
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    const frac = Math.min(1, Math.max(0, (mx - pad.l) / (w - pad.l - pad.r)));
+    const centerO = xMin + frac * (xMax - xMin);
+    const factor = Math.exp(ev.deltaY * 0.0015);
+    const fullSpan = fullMax - fullMin;
+    const minWidth = Math.max(fullSpan * 0.02, 1);
+    let newWidth = Math.max(minWidth, Math.min(fullSpan, (xMax - xMin) * factor));
+    let newMin = centerO - frac * newWidth;
+    let newMax = newMin + newWidth;
+    if(newMin < fullMin){ newMax += (fullMin - newMin); newMin = fullMin; }
+    if(newMax > fullMax){ newMin -= (newMax - fullMax); newMax = fullMax; }
+    newMin = Math.max(fullMin, newMin);
+    xsChartXView = (newMin <= fullMin + 1e-6 && newMax >= fullMax - 1e-6) ? null : { min: newMin, max: newMax };
+    refreshXsCharts();
+  }, { passive: false });
+  svg.addEventListener('mousedown', (ev) => {
+    xsChartPanState = { startClientX: ev.clientX, startMin: xMin, startMax: xMax, w, pad, fullMin, fullMax };
+  });
+  svg.addEventListener('dblclick', () => { xsChartXView = null; refreshXsCharts(); });
 
   wrap.appendChild(svg);
   return xsAreaResult;
@@ -3893,10 +4067,9 @@ function refreshChart(){
 function updateDatumNote(){
   const veText = veMode === 'auto' ? '' : (' · Vertical exaggeration: ' + veMode + '×');
   const base = 'Vertical datum: CGVD2013 (gravity-related height) · Horizontal: WGS84 (EPSG:4326)' + veText;
-  const sidebarZoom = chartXView ? ' · Zoomed — double-click chart to reset' : ' · Scroll on chart to zoom, drag to pan';
-  const modalZoom = chartXView ? ' · Zoomed — double-click chart to reset' : ' · Alt+Scroll to zoom, drag to pan';
-  const a = document.getElementById('datumNote'); if(a) a.textContent = base + sidebarZoom;
-  const b = document.getElementById('modalDatumNote'); if(b) b.textContent = base + modalZoom;
+  const zoomText = chartXView ? ' · Zoomed — double-click chart to reset' : ' · Scroll on chart to zoom, drag to pan';
+  const a = document.getElementById('datumNote'); if(a) a.textContent = base + zoomText;
+  const b = document.getElementById('modalDatumNote'); if(b) b.textContent = base + zoomText;
 }
 
 function renderChartInto(prof, wrap, tooltip, expanded){
@@ -4220,12 +4393,12 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   // listener pair registered once near gradeDragState above; this just seeds chartPanState with
   // plain numbers (never the svg/pad objects themselves) at the moment the drag starts.
   svg.addEventListener('wheel', (ev) => {
-    // In the expanded/popped-out panel, a plain wheel needs to be free to scroll the panel itself
-    // for the rare case content still exceeds it (a manually-picked high vertical exaggeration is
-    // allowed to do that on purpose - see the baseH comment above). Alt, not Ctrl, because Ctrl+wheel
-    // is the browser's own page-zoom gesture - hijacking it here would fight that. The always-zoom
-    // sidebar chart is untouched - it doesn't have the same below-the-fold content to reach.
-    if(expanded && !ev.altKey) return;
+    // Plain wheel always zooms here now, in both the sidebar and expanded/tiled contexts. It used
+    // to require Alt in the expanded panel specifically, to leave plain scroll free for reaching
+    // content that overflowed a tiled/shrunk panel - but baseH (above) now fills whatever height
+    // the panel actually has in the common Auto-exaggeration case, so that overflow is rare, and
+    // the corner resize handle (makeResizable) is the more direct fix for the cases where a
+    // deliberately-high exaggeration still needs more room than the panel has.
     ev.preventDefault();
     const rect = svg.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
