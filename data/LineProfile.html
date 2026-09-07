@@ -1370,6 +1370,7 @@ function resetAll(){
   // closing the popup - is the right place to actually clear it and pull the map slider off.
   xsCurrentStationDist = null;
   if(xsStationMapMarker){ map.removeLayer(xsStationMapMarker); xsStationMapMarker = null; }
+  if(xsSectionLine){ map.removeLayer(xsSectionLine); xsSectionLine = null; }
   xsStations = [];
   document.getElementById('xsSidebarCard').style.display = 'none';
   document.getElementById('xsSidebarChartWrap').querySelectorAll('svg').forEach(n => n.remove());
@@ -2979,6 +2980,31 @@ function closeCrossSectionModal(){
   layoutPanels();
 }
 
+// A faint reference line on the map/aerial showing the actual real-world cross-section swath at
+// a station - the exact same perpendicular line fetchCrossSection() samples (via
+// crossSectionFrame(), the shared frame both already use), sized to the current corridor width.
+// Purely visual (interactive:false - never steals a click/hover meant for the drawn line or map),
+// updated live while dragging the slider (cheap - local math only, no network) as well as on every
+// real station change.
+let xsSectionLine = null;
+function updateXsSectionLine(stationDist){
+  const frame = stationDist != null ? crossSectionFrame(stationDist) : null;
+  if(!frame){
+    if(xsSectionLine){ map.removeLayer(xsSectionLine); xsSectionLine = null; }
+    return;
+  }
+  const bufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
+  const { ux, uy, perpX, perpZ, epsg } = frame;
+  const [leftLon, leftLat] = proj4(epsg, 'WGS84', [ux - perpX*bufferM, uy - perpZ*bufferM]);
+  const [rightLon, rightLat] = proj4(epsg, 'WGS84', [ux + perpX*bufferM, uy + perpZ*bufferM]);
+  const latlngs = [[leftLat, leftLon], [rightLat, rightLon]];
+  if(!xsSectionLine){
+    xsSectionLine = L.polyline(latlngs, { color:'#7c3aed', weight:3, opacity:0.55, dashArray:'6,6', interactive:false }).addTo(map);
+  } else {
+    xsSectionLine.setLatLngs(latlngs);
+  }
+}
+
 // Marks, on both the map and the main elevation chart, exactly which station the Cross Section
 // panel is currently showing - separate from the mouse-hover crosshair (which disappears the
 // instant the cursor leaves), so the "where am I" indicator stays put while you're reading the
@@ -2986,6 +3012,7 @@ function closeCrossSectionModal(){
 function updateXsHighlight(){
   if(profile) refreshChart();
   const p = xsCurrentStationDist != null ? profilePointAtDist(xsCurrentStationDist) : null;
+  updateXsSectionLine(xsCurrentStationDist);
   if(p && p.elev != null){
     if(!xsStationMapMarker){
       xsStationMapMarker = L.marker([p.lat, p.lon], { icon: xsHandleIcon, draggable: true, autoPan: true, zIndexOffset: 500 }).addTo(map);
@@ -2993,9 +3020,10 @@ function updateXsHighlight(){
       // Leaflet has no built-in "constrain to polyline" drag, so every tick snaps the marker back
       // onto the nearest real profile sample instead of letting it float free. Live feedback while
       // dragging (chart crosshair + 3D hover marker, via showStation - same function mouse-hovering
-      // the line already drives) is free since it's all from already-fetched profile data; the
-      // actual cross-section re-fetch (a real network call, and the DTM service is documented
-      // elsewhere in this file as genuinely flaky) only happens once, on drop.
+      // the line already drives - plus the faint corridor-width reference line above) is free since
+      // it's all from already-fetched profile data; the actual cross-section re-fetch (a real
+      // network call, and the DTM service is documented elsewhere in this file as genuinely flaky)
+      // only happens once, on drop.
       xsStationMapMarker.on('drag', (e) => {
         const ll = e.target.getLatLng();
         const idx = nearestProfileIndex(ll.lat, ll.lng);
@@ -3003,6 +3031,7 @@ function updateXsHighlight(){
         if(!sp || sp.elev == null) return;
         e.target.setLatLng([sp.lat, sp.lon]);
         showStation(idx, true);
+        updateXsSectionLine(sp.dist);
       });
       xsStationMapMarker.on('dragend', (e) => {
         const ll = e.target.getLatLng();
