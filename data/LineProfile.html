@@ -427,6 +427,36 @@
     background:var(--surface-2);border:1px solid var(--border-strong);border-bottom-width:2px;
     border-radius:6px;padding:3px 7px;white-space:nowrap;
   }
+  .tutorial-overlay{
+    position:fixed;inset:0;display:none;z-index:5000;
+    background:rgba(20,20,30,0.45);
+    align-items:center;justify-content:center;
+    padding:20px;
+  }
+  .tutorial-panel{
+    position:relative;width:min(440px,92vw);
+    background:var(--surface);border-radius:16px;box-shadow:var(--shadow-lg);
+    border:1px solid var(--border);padding:32px 28px 22px;
+  }
+  .tutorial-skip{
+    position:absolute;top:16px;right:16px;background:none;border:none;
+    font-size:12.5px;font-weight:600;color:var(--text-faint);cursor:pointer;padding:4px 6px;
+  }
+  .tutorial-skip:hover{color:var(--text-dim);}
+  .tutorial-icon{
+    width:52px;height:52px;border-radius:14px;
+    background:linear-gradient(135deg,#6a6af5,#4747d6);
+    display:flex;align-items:center;justify-content:center;margin-bottom:16px;
+  }
+  #tutorialStepBody h3{margin:0 0 10px;font-size:19px;font-weight:800;color:var(--text);}
+  #tutorialStepBody p{margin:0;font-size:14.5px;line-height:1.6;color:var(--text-dim);}
+  #tutorialStepBody b{color:var(--text);}
+  .tutorial-footer{display:flex;align-items:center;justify-content:space-between;margin-top:26px;}
+  .tutorial-dots{display:flex;gap:6px;}
+  .tutorial-dot{width:7px;height:7px;border-radius:50%;background:var(--border-strong);transition:background .15s;}
+  .tutorial-dot.active{background:var(--accent-dark);}
+  .tutorial-nav{display:flex;gap:8px;}
+  #btnTutorialBack:disabled{visibility:hidden;}
   #printReport{ display:none; }
   @media print{
     body > *:not(#printReport){ display:none!important; }
@@ -495,6 +525,9 @@
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 2v20M2 12h20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
     Powered by Ontario LiDAR
   </div>
+  <button id="btnTutorial" class="icon-btn" title="Show the tutorial">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 3L2 8l10 5 8-4v6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M6 10.5V15c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
   <button id="btnShortcuts" class="icon-btn" title="Keyboard shortcuts (?)">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9.2a2.5 2.5 0 014.9.8c0 1.7-2.4 1.7-2.4 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor"/></svg>
   </button>
@@ -515,6 +548,24 @@
       <div class="shortcut-row"><span>Fly forward / left / back / right in the 3D view</span><kbd>W A S D</kbd></div>
       <div class="shortcut-row"><span>Fly in the 3D view (arrow keys also work)</span><kbd>↑ ← ↓ →</kbd></div>
       <div class="shortcut-row"><span>Show this panel</span><kbd>?</kbd></div>
+    </div>
+  </div>
+</div>
+
+<!-- Onboarding tutorial - unlike every other modal-overlay in this file, this one DOES block the
+     page behind it (a dimmed backdrop, pointer-events left on) since a first-run walkthrough is
+     conventionally focused/modal, whereas the utility panels (shortcuts, 3D, Cross Section, the
+     expanded chart) deliberately stay non-blocking so the map stays usable underneath them. -->
+<div class="tutorial-overlay" id="tutorialOverlay">
+  <div class="tutorial-panel">
+    <button id="btnTutorialSkip" class="tutorial-skip">Skip</button>
+    <div id="tutorialStepBody"></div>
+    <div class="tutorial-footer">
+      <div class="tutorial-dots" id="tutorialDots"></div>
+      <div class="tutorial-nav">
+        <button id="btnTutorialBack">Back</button>
+        <button id="btnTutorialNext" class="primary">Next</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1225,10 +1276,87 @@ function closeShortcutsHelp(){ document.getElementById('shortcutsModal').style.d
 document.getElementById('btnShortcuts').addEventListener('click', openShortcutsHelp);
 document.getElementById('btnCloseShortcuts').addEventListener('click', closeShortcutsHelp);
 
+// ---------- onboarding tutorial ----------
+// Shows automatically on every page load (Max's own choice, not a one-time-then-remembered
+// thing - a real returning user would just click Skip). Plain-language, six short steps, no
+// jargon from the rest of the app (no "chainage", "corridor", "GeoTIFF" etc.) - written for
+// someone who has genuinely never used a mapping/engineering tool before, not a rundown of
+// every feature. The advanced stuff (3D, Cross Section, Design Grade) gets one line as
+// "optional, explore later", not an explanation each - the empty-state cards already carry
+// their own reasoning once you get there.
+const TUTORIAL_STEPS = [
+  {
+    icon: '<path d="M12 3L2 8l10 5 8-4v6" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><path d="M6 10.5V15c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    title: 'Welcome to Contour',
+    body: 'This tool draws a line on a map and shows you how the ground rises and falls along it — like a side view of a hiking trail. It only takes a few clicks to get your first result. This short walkthrough covers the basics.'
+  },
+  {
+    icon: '<circle cx="11" cy="11" r="7" stroke="#fff" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="#fff" stroke-width="2" stroke-linecap="round"/>',
+    title: '1. Find your spot',
+    body: 'Type an address into the search box at the top of the page, or just click and drag the map — the same way you would in Google Maps.'
+  },
+  {
+    icon: '<path d="M4 20l3-1 11-11-2-2L5 17l-1 3z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>',
+    title: '2. Draw a line',
+    body: 'Click the purple <b>Draw Line</b> button, then click a few points on the map to trace your route. When you\'re done, click <b>Finish</b> — or just double-click your last point.'
+  },
+  {
+    icon: '<path d="M3 17l5-7 4 4 5-8 4 5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    title: '3. See your results',
+    body: 'That\'s it! A chart appears on the right showing the ground elevation along your line — how high and low it is, from start to end.'
+  },
+  {
+    icon: '<path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>',
+    title: 'Want to go further?',
+    body: 'Once you have a line, you can also see it in 3D, look at a slice sideways across it, or plan out a cut-and-fill design. These are all optional extras in the panel on the right — feel free to just stick with the basics for now.'
+  },
+  {
+    icon: '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    title: 'You\'re ready!',
+    body: 'That covers the basics. If you ever get stuck, look for the <b>?</b> button in the top-right corner for keyboard shortcuts, or the button right next to it to see this tutorial again.'
+  }
+];
+let tutorialStep = 0;
+function renderTutorialStep(){
+  const s = TUTORIAL_STEPS[tutorialStep];
+  document.getElementById('tutorialStepBody').innerHTML =
+    '<div class="tutorial-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none">' + s.icon + '</svg></div>' +
+    '<h3>' + s.title + '</h3><p>' + s.body + '</p>';
+  document.getElementById('tutorialDots').innerHTML = TUTORIAL_STEPS.map((_, i) =>
+    '<span class="tutorial-dot' + (i === tutorialStep ? ' active' : '') + '"></span>').join('');
+  document.getElementById('btnTutorialBack').disabled = tutorialStep === 0;
+  document.getElementById('btnTutorialNext').textContent = tutorialStep === TUTORIAL_STEPS.length - 1 ? 'Got it' : 'Next';
+}
+function openTutorial(){
+  tutorialStep = 0;
+  renderTutorialStep();
+  document.getElementById('tutorialOverlay').style.display = 'flex';
+}
+function closeTutorial(){
+  document.getElementById('tutorialOverlay').style.display = 'none';
+}
+document.getElementById('btnTutorialNext').addEventListener('click', () => {
+  if(tutorialStep >= TUTORIAL_STEPS.length - 1){ closeTutorial(); return; }
+  tutorialStep++;
+  renderTutorialStep();
+});
+document.getElementById('btnTutorialBack').addEventListener('click', () => {
+  if(tutorialStep <= 0) return;
+  tutorialStep--;
+  renderTutorialStep();
+});
+document.getElementById('btnTutorialSkip').addEventListener('click', closeTutorial);
+document.getElementById('btnTutorial').addEventListener('click', openTutorial);
+openTutorial();
+
 document.addEventListener('keydown', (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
   if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return; // never hijack typing into a field
 
+  if(document.getElementById('tutorialOverlay').style.display === 'flex'){
+    if(e.key === 'Escape') closeTutorial();
+    return;
+  }
   if(document.getElementById('shortcutsModal').style.display === 'block'){
     if(e.key === 'Escape' || e.key === '?') closeShortcutsHelp();
     return;
