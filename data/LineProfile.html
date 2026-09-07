@@ -3529,14 +3529,26 @@ function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
   dot.style.display = 'none';
   svg.appendChild(dot);
 
+  // Hovering here moves ACROSS the alignment (offset), not along it - the station these charts
+  // are showing stays fixed the whole time. So the map/3D marker tracks the real off-centre ground
+  // point under the cursor (computed via hoverFrame, the same perpendicular frame this station was
+  // actually sampled from), while the Elevation Profile's own crosshair/tooltip - which can only
+  // meaningfully show a point on the centreline - stays parked at this fixed station instead of
+  // trying to follow the offset (updateChartCrosshair, split out of showStation() for exactly this:
+  // a hover whose map/3D point and profile-chart point are two different real-world locations).
+  const centrePoint = profilePointAtDist(stationDist);
+  function clearXsHover(){
+    cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none';
+    hideStation(); // clears the Elevation Profile's own crosshair, the map hoverMarker, and the 3D marker together
+  }
   svg.addEventListener('mousemove', (ev) => {
     const rect = svg.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
-    if(mx < pad.l || mx > w-pad.r){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; hide3DHoverPoint(); return; }
+    if(mx < pad.l || mx > w-pad.r){ clearXsHover(); return; }
     const o = xMin + (mx-pad.l)/(w-pad.l-pad.r)*(xMax-xMin);
     let nearest = xsPoints[0], best = Infinity;
     for(const p of xsPoints){ const diff = Math.abs(p.offset-o); if(diff<best){ best=diff; nearest=p; } }
-    if(nearest.elev == null){ cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; hide3DHoverPoint(); return; }
+    if(nearest.elev == null){ clearXsHover(); return; }
     const x = X(nearest.offset), y = Y(nearest.elev);
     cross.setAttribute('x1',x); cross.setAttribute('x2',x); cross.style.display='';
     dot.setAttribute('cx',x); dot.setAttribute('cy',y); dot.style.display='';
@@ -3548,9 +3560,15 @@ function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
       const worldUTM = [hoverFrame.ux + hoverFrame.perpX*nearest.offset, hoverFrame.uy + hoverFrame.perpZ*nearest.offset];
       const [lon, lat] = proj4(hoverFrame.epsg, 'WGS84', worldUTM);
       show3DHoverPoint(lat, lon, nearest.elev);
+      if(!hoverMarker){
+        hoverMarker = L.circleMarker([lat, lon], { radius:6, color:'#fff', weight:2, fillColor:PALETTE.accentDark, fillOpacity:1 }).addTo(map);
+      } else {
+        hoverMarker.setLatLng([lat, lon]);
+      }
     }
+    if(centrePoint) updateChartCrosshair(centrePoint);
   });
-  svg.addEventListener('mouseleave', () => { cross.style.display='none'; dot.style.display='none'; tooltip.style.display='none'; hide3DHoverPoint(); });
+  svg.addEventListener('mouseleave', clearXsHover);
 
   // Mousewheel zoom (centred on the cursor's offset position) and click-drag pan across the
   // corridor width - same mechanics as the Elevation Profile chart's own zoom/pan (currentXRange/
@@ -4477,8 +4495,16 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   wrap.appendChild(svg);
 }
 
-function showStation(idx, fromMap){
-  const p = profile && profile[idx];
+// Draws the Elevation Profile's hover crosshair/dot/tooltip at a given centreline point (station +
+// elevation), on every rendered chart instance. Split out of showStation() so Cross Section hover
+// (below) can drive this using the FIXED station its chart is currently showing, independently of
+// showStation()'s own map-marker positioning - a Cross Section hover moves across offset (left/
+// right of centreline), not along it, so the station shown on the profile shouldn't move with it,
+// but the map/3D marker should track the real off-centre ground point being hovered instead of the
+// centreline. Showing both from one shared point (as showStation still does for its own callers -
+// mouse-hovering the map line or the profile chart itself) would put the map marker in the wrong
+// place for Cross Section hover.
+function updateChartCrosshair(p){
   if(!p || p.elev == null) return;
   chartInstances.forEach(ci => {
     const x = ci.X(p.dist), y = ci.Y(p.elev);
@@ -4498,6 +4524,12 @@ function showStation(idx, fromMap){
     }
     ci.tooltip.innerHTML = tip;
   });
+}
+
+function showStation(idx, fromMap){
+  const p = profile && profile[idx];
+  if(!p || p.elev == null) return;
+  updateChartCrosshair(p);
   if(!hoverMarker){
     hoverMarker = L.circleMarker([p.lat, p.lon], { radius:6, color:'#fff', weight:2, fillColor:PALETTE.accentDark, fillOpacity:1 }).addTo(map);
   } else {
