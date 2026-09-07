@@ -461,27 +461,58 @@
   @media print{
     body > *:not(#printReport){ display:none!important; }
     #printReport{ display:block!important; }
-    @page{ margin:14mm; }
+    @page{ size:letter; margin:12mm; }
   }
-  .pr-page{ font-family:var(--font-ui); color:#161824; max-width:900px; margin:0 auto; }
-  .pr-header{ display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:2px solid #4747d6; padding-bottom:12px; margin-bottom:16px; }
-  .pr-header .pr-brand{ display:flex; align-items:center; gap:10px; }
-  .pr-header .pr-brand-mark{ width:30px; height:30px; border-radius:8px; background:linear-gradient(135deg,#6a6af5,#4747d6); display:flex; align-items:center; justify-content:center; flex:none; }
-  .pr-header h1{ font-size:19px; font-weight:800; margin:0; }
-  .pr-header .pr-meta{ font-size:11px; color:#6b7080; text-align:right; line-height:1.5; }
-  .pr-section-title{ font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#6b7080; margin:20px 0 8px; }
+  /* Each .pr-page is one physical sheet: a bordered drawing frame, a sheet title at the top of the
+     content area, and a title block pinned to the bottom (standard Ontario civil drawing
+     convention) regardless of how much content sits above it - min-height holds it to one Letter
+     page, page-break-after moves each sheet onto its own printed page. */
+  .pr-page{
+    font-family:var(--font-ui); color:#161824; box-sizing:border-box;
+    border:1.25pt solid #1a1a2e; padding:7mm 7mm 0;
+    min-height:253mm; display:flex; flex-direction:column;
+    page-break-after:always;
+  }
+  .pr-page:last-child{ page-break-after:auto; }
+  .pr-sheet-title{ font-size:14.5px; font-weight:800; text-transform:uppercase; letter-spacing:0.4px; margin:0 0 4mm; padding-bottom:3mm; border-bottom:1.5pt solid #1a1a2e; display:flex; align-items:baseline; justify-content:space-between; }
+  .pr-sheet-title .pr-sheet-sub{ font-size:10px; font-weight:600; text-transform:none; color:#6b7080; letter-spacing:0; }
+  .pr-sheet-content{ flex:1 1 auto; }
+  .pr-section-title{ font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:#6b7080; margin:16px 0 7px; }
   .pr-section-title:first-of-type{ margin-top:0; }
-  .pr-map-wrap{ position:relative; border-radius:10px; overflow:hidden; border:1px solid #e7e9f2; page-break-inside:avoid; }
+  .pr-map-wrap{ position:relative; border:1px solid #d8dae8; page-break-inside:avoid; }
   .pr-map-wrap img{ display:block; width:100%; height:auto; }
   .pr-map-wrap svg{ position:absolute; inset:0; width:100%; height:100%; }
   #printReport .stats-grid{ page-break-inside:avoid; }
-  .pr-chart-wrap{ border:1px solid #e7e9f2; border-radius:10px; padding:10px; page-break-inside:avoid; }
+  .pr-chart-wrap{ border:1px solid #d8dae8; padding:9px; page-break-inside:avoid; }
   .pr-chart-wrap svg{ display:block; width:100%; height:auto; }
-  .pr-xs-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; page-break-inside:avoid; }
-  .pr-xs-card{ border:1px solid #e7e9f2; border-radius:10px; padding:10px; }
+  .pr-xs-row{ display:grid; grid-template-columns:1fr 1fr; gap:11px; page-break-inside:avoid; }
+  .pr-xs-card{ border:1px solid #d8dae8; padding:9px; }
   .pr-xs-card .pr-xs-title{ font-size:11px; font-weight:700; margin-bottom:6px; }
   .pr-xs-card svg{ display:block; width:100%; height:auto; }
-  .pr-footer{ margin-top:20px; padding-top:10px; border-top:1px solid #e7e9f2; font-size:9.5px; color:#9599a8; line-height:1.6; }
+  .pr-footer{ margin-top:16px; font-size:9px; color:#9599a8; line-height:1.5; }
+  /* Title block - full-width strip pinned to the bottom of every sheet: brand mark, project/
+     client/drawing identity in the middle, and a scale/date/drawn-by/sheet-number grid on the
+     right, the same three-zone layout typical of Ontario civil/OPSD-style drawing title blocks. */
+  .pr-titleblock{ flex:none; margin-top:6mm; border-top:1.5pt solid #1a1a2e; display:grid; grid-template-columns:26mm 1fr 46mm; font-size:8.5px; }
+  .pr-tb-brand{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; border-right:0.75pt solid #1a1a2e; padding:3mm 2mm; }
+  .pr-tb-brand .pr-tb-mark{ width:18px; height:18px; border-radius:5px; background:linear-gradient(135deg,#6a6af5,#4747d6); display:flex; align-items:center; justify-content:center; }
+  .pr-tb-brand .pr-tb-name{ font-size:9px; font-weight:800; }
+  .pr-tb-mid{ display:flex; flex-direction:column; justify-content:center; gap:1.8mm; padding:3mm 4mm; border-right:0.75pt solid #1a1a2e; }
+  .pr-tb-row{ display:flex; gap:6px; }
+  .pr-tb-row .pr-tb-label{ font-weight:700; color:#6b7080; min-width:24mm; text-transform:uppercase; letter-spacing:0.3px; }
+  .pr-tb-row .pr-tb-value{ font-weight:600; }
+  .pr-tb-right{ display:grid; grid-template-columns:1fr 1fr; }
+  .pr-tb-cell{ border-bottom:0.75pt solid #1a1a2e; padding:1.8mm 3mm; display:flex; flex-direction:column; justify-content:center; gap:1px; }
+  .pr-tb-cell:nth-child(odd){ border-right:0.75pt solid #1a1a2e; }
+  .pr-tb-cell:nth-last-child(-n+2){ border-bottom:none; }
+  .pr-tb-cell .pr-tb-label{ font-size:7px; font-weight:700; color:#6b7080; text-transform:uppercase; letter-spacing:0.3px; }
+  .pr-tb-cell .pr-tb-value{ font-size:9.5px; font-weight:700; }
+  .pr-north-arrow{ position:absolute; top:6px; right:6px; background:rgba(255,255,255,0.88); border-radius:4px; padding:3px 6px; text-align:center; font-size:10px; font-weight:800; }
+  .pr-scale-bar{ position:absolute; bottom:6px; left:6px; background:rgba(255,255,255,0.88); border-radius:4px; padding:4px 8px; font-size:8.5px; font-weight:700; }
+  .pr-scale-bar .pr-scale-line{ height:3px; background:#1a1a2e; margin-top:3px; position:relative; }
+  .pr-scale-bar .pr-scale-line::before, .pr-scale-bar .pr-scale-line::after{ content:''; position:absolute; top:-3px; width:2px; height:9px; background:#1a1a2e; }
+  .pr-scale-bar .pr-scale-line::before{ left:0; }
+  .pr-scale-bar .pr-scale-line::after{ right:0; }
   .toolbar-group{display:flex;align-items:center;gap:8px;}
   .toolbar-divider{width:1px;align-self:stretch;background:var(--border-strong);margin:2px 0;}
   .layer-toggle-group{border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;gap:0;}
@@ -843,6 +874,17 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="15" rx="2" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.6" fill="currentColor"/><path d="M4 16l5-4 4 3 3-3 4 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Save Chart PNG
         </button>
+      </div>
+      <div class="datum-note" style="margin:2px 0 8px;">Title block info for the PDF report (optional - blank fields just print blank).</div>
+      <div class="row" style="gap:8px;">
+        <div class="gp-field"><label>Project Title</label><input type="text" id="prProjectTitle" placeholder="e.g. Smith Property Drainage"></div>
+      </div>
+      <div class="row" style="margin-top:8px;gap:8px;">
+        <div class="gp-field"><label>Client / Municipality</label><input type="text" id="prClient" placeholder="e.g. Township of ..."></div>
+      </div>
+      <div class="row" style="margin-top:8px;gap:8px;">
+        <div class="gp-field"><label>Drawing No.</label><input type="text" id="prDrawingNo" placeholder="e.g. C-101"></div>
+        <div class="gp-field"><label>Drawn By</label><input type="text" id="prDrawnBy" placeholder="e.g. M.C."></div>
       </div>
       <div class="row" style="margin-top:10px;">
         <button id="btnPrintReport" style="width:100%;justify-content:center;">
@@ -1962,7 +2004,11 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     sideSlope: parseFloat(document.getElementById('sideSlope').value) || 2,
     unitSystem,
     veMode,
-    mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() }
+    mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() },
+    prProjectTitle: document.getElementById('prProjectTitle').value,
+    prClient: document.getElementById('prClient').value,
+    prDrawingNo: document.getElementById('prDrawingNo').value,
+    prDrawnBy: document.getElementById('prDrawnBy').value
   };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1995,6 +2041,10 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
 
     if(data.bottomWidth != null) document.getElementById('bottomWidth').value = data.bottomWidth;
     if(data.sideSlope != null) document.getElementById('sideSlope').value = data.sideSlope;
+    document.getElementById('prProjectTitle').value = data.prProjectTitle || '';
+    document.getElementById('prClient').value = data.prClient || '';
+    document.getElementById('prDrawingNo').value = data.prDrawingNo || '';
+    document.getElementById('prDrawnBy').value = data.prDrawnBy || '';
     unitSystem = data.unitSystem === 'imperial' ? 'imperial' : 'metric';
     document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === unitSystem));
     veMode = data.veMode || 'auto';
@@ -2215,6 +2265,33 @@ function localizeClonedSvgIds(svgEl, suffix){
   });
 }
 
+// Standard Ontario civil/OPSD-style title block - brand, project/client/drawing identity, and a
+// sheet/date/drawn-by grid, reused identically on every sheet of the report (only the drawing
+// description and sheet number change). Reads the optional prProjectTitle/prClient/prDrawingNo/
+// prDrawnBy sidebar fields live at print time rather than baking them in once, so a value typed
+// after the report was last built is never stale.
+function buildTitleBlock(sheetDesc, sheetNum, totalSheets){
+  const projectTitle = document.getElementById('prProjectTitle').value.trim();
+  const client = document.getElementById('prClient').value.trim();
+  const drawingNo = document.getElementById('prDrawingNo').value.trim();
+  const drawnBy = document.getElementById('prDrawnBy').value.trim();
+  const dash = '—';
+  return '<div class="pr-titleblock">' +
+    '<div class="pr-tb-brand"><div class="pr-tb-mark"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M3 17l5-7 4 4 5-8 4 5" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="pr-tb-name">Contour</div></div>' +
+    '<div class="pr-tb-mid">' +
+      '<div class="pr-tb-row"><span class="pr-tb-label">Project</span><span class="pr-tb-value">' + escHtml(projectTitle || dash) + '</span></div>' +
+      '<div class="pr-tb-row"><span class="pr-tb-label">Client / Municipality</span><span class="pr-tb-value">' + escHtml(client || dash) + '</span></div>' +
+      '<div class="pr-tb-row"><span class="pr-tb-label">Drawing</span><span class="pr-tb-value">' + escHtml(sheetDesc) + '</span></div>' +
+    '</div>' +
+    '<div class="pr-tb-right">' +
+      '<div class="pr-tb-cell"><span class="pr-tb-label">Drawing No.</span><span class="pr-tb-value">' + escHtml(drawingNo || dash) + '</span></div>' +
+      '<div class="pr-tb-cell"><span class="pr-tb-label">Sheet</span><span class="pr-tb-value">' + sheetNum + ' of ' + totalSheets + '</span></div>' +
+      '<div class="pr-tb-cell"><span class="pr-tb-label">Date</span><span class="pr-tb-value">' + new Date().toLocaleDateString() + '</span></div>' +
+      '<div class="pr-tb-cell"><span class="pr-tb-label">Drawn By</span><span class="pr-tb-value">' + escHtml(drawnBy || dash) + '</span></div>' +
+    '</div>' +
+  '</div>';
+}
+
 async function generatePdfReport(){
   if(!profile) return;
   const btn = document.getElementById('btnPrintReport');
@@ -2255,6 +2332,14 @@ async function generatePdfReport(){
       '<circle cx="'+startPx.x.toFixed(1)+'" cy="'+startPx.y.toFixed(1)+'" r="6" fill="#22c55e" stroke="#fff" stroke-width="2"/>' +
       '<circle cx="'+endPx.x.toFixed(1)+'" cy="'+endPx.y.toFixed(1)+'" r="6" fill="#e0483e" stroke="#fff" stroke-width="2"/>' +
     '</svg>';
+    // North arrow (the /export bbox request has no rotation parameter, so the returned image is
+    // always north-up) and a real scale bar sized from the actual bbox-to-pixel ratio of that same
+    // image request - both standard fixtures on an Ontario civil location/plan sheet.
+    const finalBboxW = xmax - xmin;
+    const barMeters = niceGridSpacing(finalBboxW * 0.22, 1);
+    const barPx = barMeters / finalBboxW * imgW;
+    const northArrowHtml = '<div class="pr-north-arrow"><svg width="14" height="16" viewBox="0 0 14 16" fill="none"><path d="M7 0L13 12H1L7 0Z" fill="#1a1a2e"/></svg>N</div>';
+    const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
 
     // Cross-sections at the deepest cut and deepest fill stations - fetched fresh so the report is
     // self-contained regardless of whether the Cross Section panel had anything open at all.
@@ -2273,8 +2358,10 @@ async function generatePdfReport(){
         const svg = buildStaticCrossSectionSVG(xsPoints, station.dist, 400, 210);
         if(svg) cards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+label+' — '+fmtStation(station.dist)+' ('+fmtElev(station.amount)+')</div>'+svg+'</div>');
       });
-      if(cards.length) xsHtml = '<div class="pr-section-title">Cross-Sections at Critical Stations</div><div class="pr-xs-row">'+cards.join('')+'</div>';
+      xsHtml = cards.length ? '<div class="pr-xs-row">'+cards.join('')+'</div>' : '';
     }
+    const hasXsSheet = xsHtml !== '';
+    const totalSheets = hasXsSheet ? 3 : 2;
 
     // Clones keep their source id attributes, which would collide with the live #statsGrid/#cutFillStats/
     // chart svg once inserted into #printReport (which sits before #main in the document) - getElementById
@@ -2291,24 +2378,40 @@ async function generatePdfReport(){
       cutFillClone.removeAttribute('id');
       cutFillHtml = '<div class="pr-section-title">Design Grade — Cut / Fill</div>' + cutFillClone.outerHTML;
     }
+    const attribution = 'Ground elevation: Ontario LiDAR DTM (Land Information Ontario), 0.5m resolution. Aerial imagery: Ontario Orthophotography (LIO). Vertical datum CGVD2013, horizontal WGS84. Generated by Contour.';
+
+    // One .pr-page per sheet - each a bordered drawing frame with its own title block (standard
+    // multi-sheet drawing-set convention), rather than one long continuously-flowing page. Sheet 3
+    // (cross-sections) only exists when there's a design grade to have critical stations from.
+    const sheet1 =
+      '<div class="pr-page">' +
+        '<div class="pr-sheet-title">Location Plan<span class="pr-sheet-sub">Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</span></div>' +
+        '<div class="pr-sheet-content">' +
+          '<div class="pr-map-wrap"><img id="prMapImg" src="'+mapImgUrl+'">' + mapOverlaySvg + northArrowHtml + scaleBarHtml + '</div>' +
+          '<div class="pr-section-title">Profile Summary</div>' +
+          statsClone.outerHTML +
+        '</div>' +
+        '<div class="pr-footer">' + attribution + '</div>' +
+        buildTitleBlock('Location Plan', 1, totalSheets) +
+      '</div>';
+    const sheet2 =
+      '<div class="pr-page">' +
+        '<div class="pr-sheet-title">Elevation Profile' + (designGrade ? '<span class="pr-sheet-sub">With Design Grade &amp; Cut/Fill</span>' : '') + '</div>' +
+        '<div class="pr-sheet-content">' +
+          '<div class="pr-chart-wrap">' + (chartClone ? chartClone.outerHTML : '<p>No chart available.</p>') + '</div>' +
+          cutFillHtml +
+        '</div>' +
+        buildTitleBlock('Elevation Profile', 2, totalSheets) +
+      '</div>';
+    const sheet3 = hasXsSheet ?
+      '<div class="pr-page">' +
+        '<div class="pr-sheet-title">Cross Sections<span class="pr-sheet-sub">At Critical Stations</span></div>' +
+        '<div class="pr-sheet-content">' + xsHtml + '</div>' +
+        buildTitleBlock('Cross Sections', 3, totalSheets) +
+      '</div>' : '';
 
     const container = document.getElementById('printReport');
-    container.innerHTML =
-      '<div class="pr-page">' +
-        '<div class="pr-header">' +
-          '<div class="pr-brand"><div class="pr-brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M3 17l5-7 4 4 5-8 4 5" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h1>Contour — Elevation Profile Report</h1></div>' +
-          '<div class="pr-meta">' + new Date().toLocaleDateString() + '<br>Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</div>' +
-        '</div>' +
-        '<div class="pr-section-title">Location</div>' +
-        '<div class="pr-map-wrap"><img id="prMapImg" src="'+mapImgUrl+'">' + mapOverlaySvg + '</div>' +
-        '<div class="pr-section-title">Profile Summary</div>' +
-        statsClone.outerHTML +
-        '<div class="pr-section-title">Elevation Profile</div>' +
-        '<div class="pr-chart-wrap">' + (chartClone ? chartClone.outerHTML : '<p>No chart available.</p>') + '</div>' +
-        cutFillHtml +
-        xsHtml +
-        '<div class="pr-footer">Ground elevation: Ontario LiDAR DTM (Land Information Ontario), 0.5m resolution. Aerial imagery: Ontario Orthophotography (LIO). Vertical datum CGVD2013, horizontal WGS84. Generated by Contour.</div>' +
-      '</div>';
+    container.innerHTML = sheet1 + sheet2 + sheet3;
 
     const img = document.getElementById('prMapImg');
     if(img && !img.complete){
