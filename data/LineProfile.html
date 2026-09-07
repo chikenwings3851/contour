@@ -462,17 +462,21 @@
     body > *:not(#printReport){ display:none!important; }
     #printReport{ display:block!important; }
     @page{ size:letter; margin:12mm; }
+    @page pr-landscape-page{ size:letter landscape; margin:12mm; }
   }
   /* Each .pr-page is one physical sheet: a bordered drawing frame, a sheet title at the top of the
      content area, and a title block pinned to the bottom (standard Ontario civil drawing
      convention) regardless of how much content sits above it - min-height holds it to one Letter
-     page, page-break-after moves each sheet onto its own printed page. */
+     page, page-break-after moves each sheet onto its own printed page. The Plan & Profile sheet
+     opts into the named landscape page above (via .pr-landscape) since it's wide, not tall content -
+     a CSS Paged Media named page, not a global setting, so every other sheet stays portrait. */
   .pr-page{
     font-family:var(--font-ui); color:#161824; box-sizing:border-box;
     border:1.25pt solid #1a1a2e; padding:7mm 7mm 0;
     min-height:253mm; display:flex; flex-direction:column;
     page-break-after:always;
   }
+  .pr-page.pr-landscape{ page:pr-landscape-page; min-height:192mm; }
   .pr-page:last-child{ page-break-after:auto; }
   .pr-sheet-title{ font-size:14.5px; font-weight:800; text-transform:uppercase; letter-spacing:0.4px; margin:0 0 4mm; padding-bottom:3mm; border-bottom:1.5pt solid #1a1a2e; display:flex; align-items:baseline; justify-content:space-between; }
   .pr-sheet-title .pr-sheet-sub{ font-size:10px; font-weight:600; text-transform:none; color:#6b7080; letter-spacing:0; }
@@ -894,7 +898,7 @@
         <div class="gp-field"><label>Drawn By</label><input type="text" id="prDrawnBy" placeholder="e.g. M.C."></div>
       </div>
       <div class="row" style="margin-top:8px;gap:8px;">
-        <div class="gp-field"><label>Cross-Section Interval (m)</label><input type="number" id="prXsInterval" min="1" step="1" placeholder="blank = critical stations only"></div>
+        <div class="gp-field"><label>Cross-Section Interval (m)</label><input type="number" id="prXsInterval" min="1" step="1" value="20" placeholder="blank = critical stations only"></div>
       </div>
       <div class="row" style="margin-top:10px;">
         <button id="btnPrintReport" style="width:100%;justify-content:center;">
@@ -2325,7 +2329,12 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
   const marginM = Math.max(actualHalfWidthM * 1.3, 25);
   const sxmin = Math.min(...utm2.map(p=>p.x)) - marginM, sxmax = Math.max(...utm2.map(p=>p.x)) + marginM;
   const symin = Math.min(...utm2.map(p=>p.y)) - marginM, symax = Math.max(...utm2.map(p=>p.y)) + marginM;
-  const srcMPerPx = 0.5;
+  // Source resolution matches whatever the strip is actually zoomed to (1/ppScale metres per output
+  // pixel), not a flat 0.5m/px - a short line has a much higher ppScale (more px per metre) than a
+  // long one, and fetching a fixed 0.5m/px source for it left the warped strip visibly blocky once
+  // nearest-neighbor-equivalent sampling had to stretch coarse source pixels across many output ones.
+  const outputMPerPx = 1 / ppScale;
+  const srcMPerPx = Math.max(0.1, Math.min(0.5, outputMPerPx));
   let srcW = Math.max(64, Math.round((sxmax-sxmin)/srcMPerPx));
   let srcH = Math.max(64, Math.round((symax-symin)/srcMPerPx));
   const MAXSRC = 2048;
@@ -2344,6 +2353,24 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
   sctx.drawImage(img, 0, 0, srcW, srcH);
   const srcData = sctx.getImageData(0, 0, srcW, srcH).data;
 
+  // Bilinear rather than nearest-neighbor - smooths over both the remaining source/output resolution
+  // mismatch (after the MAXSRC cap) and the fact that neighbouring output columns sample slightly
+  // different source rotations/offsets, which nearest-neighbor rendered as visible stair-stepping.
+  function sampleBilinear(fx, fy){
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+    const tx = fx - x0, ty = fy - y0;
+    const cx0 = Math.max(0, Math.min(srcW-1, x0)), cx1 = Math.max(0, Math.min(srcW-1, x0+1));
+    const cy0 = Math.max(0, Math.min(srcH-1, y0)), cy1 = Math.max(0, Math.min(srcH-1, y0+1));
+    const i00 = (cy0*srcW+cx0)*4, i10 = (cy0*srcW+cx1)*4, i01 = (cy1*srcW+cx0)*4, i11 = (cy1*srcW+cx1)*4;
+    const out = [0,0,0];
+    for(let c=0;c<3;c++){
+      const top = srcData[i00+c]*(1-tx) + srcData[i10+c]*tx;
+      const bot = srcData[i01+c]*(1-tx) + srcData[i11+c]*tx;
+      out[c] = top*(1-ty) + bot*ty;
+    }
+    return out;
+  }
+
   const outCanvas = document.createElement('canvas');
   outCanvas.width = ppW; outCanvas.height = ppPlanH;
   const octx = outCanvas.getContext('2d');
@@ -2359,15 +2386,15 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
       if(!frame){ od[idx]=240; od[idx+1]=240; od[idx+2]=244; od[idx+3]=255; continue; }
       const offM = (y - ppPlanH/2) / ppScale;
       const sux = frame.ux + frame.perpX*offM, suy = frame.uy + frame.perpZ*offM;
-      const sx = Math.round((sux - sxmin) / (sxmax - sxmin) * srcW);
-      const sy = Math.round((1 - (suy - symin) / (symax - symin)) * srcH);
-      if(sx < 0 || sy < 0 || sx >= srcW || sy >= srcH){ od[idx]=225; od[idx+1]=225; od[idx+2]=230; od[idx+3]=255; continue; }
-      const sIdx = (sy * srcW + sx) * 4;
-      od[idx] = srcData[sIdx]; od[idx+1] = srcData[sIdx+1]; od[idx+2] = srcData[sIdx+2]; od[idx+3] = 255;
+      const fx = (sux - sxmin) / (sxmax - sxmin) * srcW - 0.5;
+      const fy = (1 - (suy - symin) / (symax - symin)) * srcH - 0.5;
+      if(fx < -1 || fy < -1 || fx > srcW || fy > srcH){ od[idx]=225; od[idx+1]=225; od[idx+2]=230; od[idx+3]=255; continue; }
+      const [r,g,b] = sampleBilinear(fx, fy);
+      od[idx] = r; od[idx+1] = g; od[idx+2] = b; od[idx+3] = 255;
     }
   }
   octx.putImageData(outImg, 0, 0);
-  return outCanvas.toDataURL('image/jpeg', 0.9);
+  return outCanvas.toDataURL('image/jpeg', 0.92);
 }
 
 // Standard Ontario civil/OPSD-style title block - brand, project/client/drawing identity, and a
@@ -2415,6 +2442,7 @@ async function generatePdfReport(){
     if(zone < 15 || zone > 18) throw new Error('this line is in UTM zone ' + zone + 'N, outside the zones set up for this (15N-18N covers all of Ontario).');
     const sr = 26900 + zone;
     const epsg = 'EPSG:' + sr;
+    const totalLen = profile[profile.length-1].dist;
     const utmPts = valid.map(p => { const [x,y] = proj4('WGS84', epsg, [p.lon, p.lat]); return {x,y}; });
     const uxs = utmPts.map(p=>p.x), uys = utmPts.map(p=>p.y);
     let xmin = Math.min(...uxs), xmax = Math.max(...uxs), ymin = Math.min(...uys), ymax = Math.max(...uys);
@@ -2432,8 +2460,43 @@ async function generatePdfReport(){
     let linePath = '';
     utmPts.forEach((p,i) => { const px=toPx(p.x,p.y); linePath += (i===0?'M':'L')+px.x.toFixed(1)+','+px.y.toFixed(1)+' '; });
     const startPx = toPx(utmPts[0].x, utmPts[0].y), endPx = toPx(utmPts[utmPts.length-1].x, utmPts[utmPts.length-1].y);
+
+    // Stationing along the alignment - small perpendicular tick marks + labels at round intervals,
+    // interpolated along the same utmPts/valid arrays used to draw the line itself, so the Location
+    // Plan carries real chainage the same way a proper civil location plan would.
+    function utmAtStationPlan(d){
+      for(let i=1;i<valid.length;i++){
+        if(valid[i].dist >= d || i === valid.length-1){
+          const seg = (valid[i].dist - valid[i-1].dist) || 1;
+          const t = Math.min(1, Math.max(0, (d - valid[i-1].dist) / seg));
+          const x = utmPts[i-1].x + (utmPts[i].x - utmPts[i-1].x) * t;
+          const y = utmPts[i-1].y + (utmPts[i].y - utmPts[i-1].y) * t;
+          let dx = utmPts[i].x - utmPts[i-1].x, dy = utmPts[i].y - utmPts[i-1].y;
+          const len = Math.hypot(dx, dy) || 1;
+          return { x, y, dx: dx/len, dy: dy/len };
+        }
+      }
+      return null;
+    }
+    const mPerPxPlan = (xmax - xmin) / imgW;
+    const planTickLenM = 6 * mPerPxPlan;
+    const planStationStep = niceGridSpacing(totalLen, 6);
+    let planStationSvg = '';
+    for(let d = 0; d <= totalLen + 1e-6; d += planStationStep){
+      const dd = Math.min(d, totalLen);
+      const pt = utmAtStationPlan(dd);
+      if(!pt) continue;
+      const perpX = -pt.dy, perpY = pt.dx;
+      const a = toPx(pt.x - perpX*planTickLenM, pt.y - perpY*planTickLenM);
+      const b = toPx(pt.x + perpX*planTickLenM, pt.y + perpY*planTickLenM);
+      const lbl = toPx(pt.x + perpX*planTickLenM*2.4, pt.y + perpY*planTickLenM*2.4);
+      planStationSvg += '<line x1="'+a.x.toFixed(1)+'" y1="'+a.y.toFixed(1)+'" x2="'+b.x.toFixed(1)+'" y2="'+b.y.toFixed(1)+'" stroke="#1a1a2e" stroke-width="1.6"/>' +
+        '<text x="'+lbl.x.toFixed(1)+'" y="'+lbl.y.toFixed(1)+'" font-size="9" font-weight="700" fill="#1a1a2e" text-anchor="middle" dominant-baseline="middle" style="paint-order:stroke;stroke:#fff;stroke-width:2.5px;">'+fmtStation(dd)+'</text>';
+    }
+
     const mapOverlaySvg = '<svg width="'+imgW+'" height="'+imgH+'" viewBox="0 0 '+imgW+' '+imgH+'" xmlns="'+NS+'">' +
       '<path d="'+linePath+'" fill="none" stroke="#ff6a3d" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>' +
+      planStationSvg +
       '<circle cx="'+startPx.x.toFixed(1)+'" cy="'+startPx.y.toFixed(1)+'" r="6" fill="#22c55e" stroke="#fff" stroke-width="2"/>' +
       '<circle cx="'+endPx.x.toFixed(1)+'" cy="'+endPx.y.toFixed(1)+'" r="6" fill="#e0483e" stroke="#fff" stroke-width="2"/>' +
     '</svg>';
@@ -2446,14 +2509,16 @@ async function generatePdfReport(){
     const northArrowHtml = '<div class="pr-north-arrow"><svg width="14" height="16" viewBox="0 0 14 16" fill="none"><path d="M7 0L13 12H1L7 0Z" fill="#1a1a2e"/></svg>N</div>';
     const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
 
-    const totalLen = profile[profile.length-1].dist;
-
     // Plan & Profile sheet - the plan strip straightened so its horizontal axis is exactly station
     // distance (see buildStraightenedPlanImg), stacked directly above a matching full-extent profile
     // chart at the identical w/pad/scale, with dashed match-lines tying the two together at round
     // stations. Best-effort: a fetch failure here drops the sheet (with a note) rather than failing
     // the whole report, matching the same resilience precedent as the cross-section fetches below.
-    const ppW = 860, ppPad = { l: 58, r: 16 }, ppProfileH = 220;
+    // Landscape (see .pr-landscape) gives this sheet roughly 240mm of usable width instead of
+    // portrait's ~177mm - ppW is scaled up by that same ratio so the extra physical width becomes
+    // extra horizontal resolution/station spacing rather than just stretching the same rendered
+    // size, while ppPlanH/ppProfileH are left alone so the sheet's rendered height doesn't grow.
+    const ppW = 1160, ppPad = { l: 58, r: 16 }, ppProfileH = 220;
     const ppScale = (ppW - ppPad.l - ppPad.r) / totalLen;
     const ppBufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
     const ppPlanH = Math.max(120, Math.min(320, Math.round(2 * ppBufferM * ppScale)));
@@ -2465,7 +2530,15 @@ async function generatePdfReport(){
     }
     const profileSvg = buildStaticProfileSVG(profile, ppW, ppPad, ppProfileH);
     const ppXStep = niceGridSpacing(totalLen, 8);
-    let ppMatchlines = '';
+    // The centerline sits exactly at y=ppPlanH/2 by construction (station is the x-axis, lateral
+    // offset from the true centerline is the y-axis - see buildStraightenedPlanImg), so drawing it
+    // is just a straight horizontal line, not a computed path - but without SOME visible marker for
+    // the actual alignment, the strip is just an unlabelled aerial crop with no indication of where
+    // the drawn line runs, unlike the Location Plan sheet's orange line. Same colours/markers as
+    // that sheet for visual consistency between the two.
+    let ppMatchlines = '<line x1="'+ppPad.l+'" y1="'+(ppPlanH/2)+'" x2="'+(ppW-ppPad.r)+'" y2="'+(ppPlanH/2)+'" stroke="#ff6a3d" stroke-width="3" stroke-linecap="round"/>' +
+      '<circle cx="'+ppPad.l+'" cy="'+(ppPlanH/2)+'" r="5" fill="#22c55e" stroke="#fff" stroke-width="1.5"/>' +
+      '<circle cx="'+(ppW-ppPad.r)+'" cy="'+(ppPlanH/2)+'" r="5" fill="#e0483e" stroke="#fff" stroke-width="1.5"/>';
     for(let d = 0; d <= totalLen + 1e-6; d += ppXStep){
       const dd = Math.min(d, totalLen);
       const x = (ppPad.l + dd/totalLen*(ppW-ppPad.l-ppPad.r)).toFixed(1);
@@ -2478,39 +2551,46 @@ async function generatePdfReport(){
       ? '<img src="'+planImgDataUrl+'">'
       : '<div style="padding:16px;font-size:11px;color:#9599a8;">Plan strip unavailable' + (planProfileError ? ' (' + escHtml(planProfileError) + ')' : '') + '.</div>';
 
-    // Cross-sections - either at the deepest cut/fill stations (default) or at a fixed interval the
-    // user chooses (prXsInterval), paginated across as many sheets as needed. Fetched fresh so the
-    // report is self-contained regardless of whether the Cross Section panel had anything open.
+    // Cross-sections - the deepest cut/fill stations ALWAYS included, plus a fixed interval on top
+    // when prXsInterval is set (both together, not either/or - a cut/fill station that lands within
+    // 1m of an interval station is treated as the same one, tagged rather than duplicated), all
+    // sorted by station and paginated across as many sheets as needed. Fetched fresh so the report
+    // is self-contained regardless of whether the Cross Section panel had anything open.
     let xsCards = [], xsIntervalLabel = '';
     if(designGrade){
       const intervalM = parseFloat(document.getElementById('prXsInterval').value);
       const useInterval = intervalM > 0;
-      let stationDists;
+      const { maxCut, maxFill } = computeCutFillStats();
+      const stationEntries = [];
+      if(maxCut) stationEntries.push({ dist: maxCut.dist, tag: 'Max Cut' });
+      if(maxFill) stationEntries.push({ dist: maxFill.dist, tag: 'Max Fill' });
       if(useInterval){
-        stationDists = [];
-        for(let d = 0; d <= totalLen + 1e-6; d += intervalM) stationDists.push(Math.min(d, totalLen));
-        if(stationDists.length > 40) throw new Error('cross-section interval too small — ' + stationDists.length + ' stations would be generated (max 40). Try a larger interval.');
-        xsIntervalLabel = 'Every ' + fmtDist(intervalM);
+        for(let d = 0; d <= totalLen + 1e-6; d += intervalM){
+          const dd = Math.min(d, totalLen);
+          if(!stationEntries.some(e => Math.abs(e.dist - dd) < 1)) stationEntries.push({ dist: dd, tag: null });
+        }
+        xsIntervalLabel = 'Every ' + fmtDist(intervalM) + ' + Critical Stations';
       } else {
-        const { maxCut, maxFill } = computeCutFillStats();
-        stationDists = [maxCut, maxFill].filter(Boolean).map(s => s.dist);
         xsIntervalLabel = 'At Critical Stations';
       }
+      stationEntries.sort((a,b) => a.dist - b.dist);
+      if(stationEntries.length > 40) throw new Error('cross-section interval too small — ' + stationEntries.length + ' stations would be generated (max 40). Try a larger interval.');
       const bufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
-      const settled = await Promise.allSettled(stationDists.map(dist =>
-        fetchCrossSection(dist, bufferM).then(xsPoints => ({ dist, xsPoints }))
+      const settled = await Promise.allSettled(stationEntries.map(entry =>
+        fetchCrossSection(entry.dist, bufferM).then(xsPoints => ({ entry, xsPoints }))
       ));
       settled.forEach(r => {
         if(r.status !== 'fulfilled') return; // best-effort - a failed fetch here just means one fewer card, not a failed report
-        const { dist, xsPoints } = r.value;
-        const svg = buildStaticCrossSectionSVG(xsPoints, dist, 400, 210);
+        const { entry, xsPoints } = r.value;
+        const svg = buildStaticCrossSectionSVG(xsPoints, entry.dist, 400, 210);
         if(!svg) return;
-        const p = profilePointAtDist(dist);
-        let title = fmtStation(dist);
+        const p = profilePointAtDist(entry.dist);
+        let title = fmtStation(entry.dist);
         if(p && p.elev != null){
-          const diff = p.elev - designElevAt(dist);
+          const diff = p.elev - designElevAt(entry.dist);
           if(Math.abs(diff) > 0.01) title += ' — ' + (diff > 0 ? 'Cut ' : 'Fill ') + fmtElev(Math.abs(diff));
         }
+        if(entry.tag) title += ' (' + entry.tag + ')';
         xsCards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+title+'</div>'+svg+'</div>');
       });
     }
@@ -2547,7 +2627,7 @@ async function generatePdfReport(){
         buildTitleBlock('Location Plan', 1, totalSheets) +
       '</div>';
     const sheet2 =
-      '<div class="pr-page">' +
+      '<div class="pr-page pr-landscape">' +
         '<div class="pr-sheet-title">Plan &amp; Profile<span class="pr-sheet-sub">Straightened Alignment · Stations Aligned</span></div>' +
         '<div class="pr-sheet-content">' +
           '<div class="pr-pp-wrap">' +
@@ -5048,8 +5128,12 @@ function openGradeModal(){
   gradeOpen = true;
   document.getElementById('gradeModal').style.display = 'block';
   bringToFront(document.querySelector('.grade-panel'));
+  // Shaping a grade needs to see it against the whole line, not whatever sub-range the chart
+  // happened to be wheel-zoomed to from an earlier, unrelated look at the profile.
+  chartXView = null;
   layoutPanels();
   renderGradeEditor();
+  refreshChart();
 }
 function closeGradeModal(){
   gradeOpen = false;
