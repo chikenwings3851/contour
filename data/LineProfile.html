@@ -476,6 +476,7 @@
     position:relative;min-height:220px;
   }
   .xs-station-select{max-width:140px;}
+  .xs-custom-input{flex:1;min-width:0;width:auto;padding:8px 10px;font-size:12.5px;}
   .drag-dots{color:var(--text-faint);}
 </style>
 </head>
@@ -657,8 +658,11 @@
         <button id="xsSidebarPrev" class="icon-btn">‹</button>
         <select id="xsSidebarStationSelect" class="xs-station-select"></select>
         <button id="xsSidebarNext" class="icon-btn">›</button>
-        <button id="btnAddXsStation" class="icon-btn" title="Add a custom station here">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </div>
+      <div class="row" style="margin-top:6px;gap:6px;">
+        <input type="text" id="xsSidebarCustomInput" class="xs-custom-input" placeholder="Jump to station (m or 0+150)">
+        <button id="xsSidebarGoCustom" class="icon-btn" title="Jump to this station">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
       <div id="xsSidebarStatus" class="xs-status"></div>
@@ -902,13 +906,16 @@
         <button id="xsPrev" class="icon-btn">‹</button>
         <select id="xsStationSelect" class="xs-station-select"></select>
         <button id="xsNext" class="icon-btn">›</button>
-        <button id="btnAddXsStationPopup" class="icon-btn" title="Add a custom station here">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-        </button>
         <button id="btnCloseXs" class="icon-btn">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
       </div>
+    </div>
+    <div class="row" style="margin-bottom:10px;gap:6px;">
+      <input type="text" id="xsCustomInput" class="xs-custom-input" placeholder="Jump to station (m or 0+150)">
+      <button id="xsGoCustom" class="icon-btn" title="Jump to this station">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
     <div id="xsStatus" class="xs-status"></div>
     <div id="xsChartWrap" class="xs-chart-wrap">
@@ -3042,8 +3049,29 @@ document.getElementById('xsSidebarStationSelect').addEventListener('change', (e)
 document.getElementById('xsSidebarPrev').addEventListener('click', () => stepStation(-1));
 document.getElementById('xsSidebarNext').addEventListener('click', () => stepStation(1));
 document.getElementById('btnExpandXs').addEventListener('click', () => openCrossSectionModal());
-document.getElementById('btnAddXsStation').addEventListener('click', () => addCustomStation(xsCurrentStationDist));
-document.getElementById('btnAddXsStationPopup').addEventListener('click', () => addCustomStation(xsCurrentStationDist));
+// Typing an exact chainage (plain metres, or engineering "km+m" notation like "0+150") jumps
+// straight to it as a new custom station - the actual ask was "let me type a station and snap to
+// it", not "mark wherever I already am" (the first version of this feature, before Max corrected
+// it). Accepts either format regardless of the metric/imperial display toggle, since chainage
+// notation is conventionally always in the base survey unit.
+function parseStationInput(str){
+  if(!str) return null;
+  str = str.trim().replace(/^STA\s*/i, '');
+  const chainageMatch = str.match(/^(-?\d+)\+(\d+(\.\d+)?)$/);
+  if(chainageMatch) return parseFloat(chainageMatch[1]) * 1000 + parseFloat(chainageMatch[2]);
+  const n = parseFloat(str);
+  return isNaN(n) ? null : n;
+}
+function submitCustomXsStation(inputEl){
+  const dist = parseStationInput(inputEl.value);
+  if(dist == null) return;
+  addCustomStation(dist);
+  inputEl.value = '';
+}
+document.getElementById('xsSidebarGoCustom').addEventListener('click', () => submitCustomXsStation(document.getElementById('xsSidebarCustomInput')));
+document.getElementById('xsSidebarCustomInput').addEventListener('keydown', (e) => { if(e.key === 'Enter') submitCustomXsStation(e.target); });
+document.getElementById('xsGoCustom').addEventListener('click', () => submitCustomXsStation(document.getElementById('xsCustomInput')));
+document.getElementById('xsCustomInput').addEventListener('keydown', (e) => { if(e.key === 'Enter') submitCustomXsStation(e.target); });
 document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && xsOpen) closeCrossSectionModal(); });
 
 function closeCrossSectionModal(){
@@ -3163,10 +3191,10 @@ function buildXsStationList(){
   applyXsStationList(computeAutoXsStations());
 }
 
-// Adds a station at an arbitrary chainage (clamped to the line's real extent), in all views at
-// once - the dropdowns (sidebar + popup, tagged with a star), the 3D terrain's station markers
-// (buildStationMarkers3D reads xsStations directly), and jumps straight to it. Defaults to
-// wherever the map slider/current station already is - the natural "mark this exact spot" action.
+// Adds a station at an arbitrary typed chainage (clamped to the line's real extent), in all views
+// at once - the dropdowns (sidebar + popup, tagged with a star), the 3D terrain's station markers
+// (buildStationMarkers3D reads xsStations directly), and jumps straight to it, updating the map
+// slider / elevation-chart highlight / Cross Section via loadCrossSection's own updateXsHighlight.
 function addCustomStation(dist){
   if(!profile || dist == null || isNaN(dist)) return;
   const totalLen = profile[profile.length-1].dist;
