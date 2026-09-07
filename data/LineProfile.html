@@ -4467,12 +4467,14 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   });
   svg.addEventListener('dblclick', () => { if(!chartMeasureMode){ chartXView = null; refreshChart(); } });
 
-  // Measure tool: each click places the next point (real ground samples only, snapped to the
-  // nearest actual profile sample so the numbers reflect real data, not an arbitrary pixel).
-  // A completed a+b measurement is superseded by starting fresh on the next click rather than
-  // requiring an explicit clear.
+  // Click either places the next Measure-tool point (if that's armed), or otherwise jumps the
+  // Cross Section to whatever station was clicked - real browser 'click' semantics already only
+  // fire on a genuine stationary click, not a pan-drag, so this needs no separate threshold check
+  // of its own. Both branches share the same nearest-real-sample lookup (real ground samples only,
+  // snapped to the nearest actual profile sample so the numbers reflect real data, not an
+  // arbitrary pixel). A completed a+b measurement is superseded by starting fresh on the next
+  // click rather than requiring an explicit clear.
   svg.addEventListener('click', (ev) => {
-    if(!chartMeasureMode) return;
     const rect = svg.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
     if(mx < pad.l || mx > w - pad.r) return;
@@ -4484,12 +4486,16 @@ function renderChartInto(prof, wrap, tooltip, expanded){
     }
     const p = prof[nearestIdx];
     if(p.elev == null) return;
-    if(!chartMeasure || (chartMeasure.a && chartMeasure.b)){
-      chartMeasure = { a: { dist: p.dist, elev: p.elev } };
-    } else {
-      chartMeasure.b = { dist: p.dist, elev: p.elev };
+    if(chartMeasureMode){
+      if(!chartMeasure || (chartMeasure.a && chartMeasure.b)){
+        chartMeasure = { a: { dist: p.dist, elev: p.elev } };
+      } else {
+        chartMeasure.b = { dist: p.dist, elev: p.elev };
+      }
+      refreshChart();
+    } else if(xsStations.length){
+      loadCrossSection(p.dist);
     }
-    refreshChart();
   });
 
   wrap.appendChild(svg);
