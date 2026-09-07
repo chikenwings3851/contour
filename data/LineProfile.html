@@ -886,6 +886,9 @@
         <div class="gp-field"><label>Drawing No.</label><input type="text" id="prDrawingNo" placeholder="e.g. C-101"></div>
         <div class="gp-field"><label>Drawn By</label><input type="text" id="prDrawnBy" placeholder="e.g. M.C."></div>
       </div>
+      <div class="row" style="margin-top:8px;gap:8px;">
+        <div class="gp-field"><label>Cross-Section Interval (m)</label><input type="number" id="prXsInterval" min="1" step="1" placeholder="blank = critical stations only"></div>
+      </div>
       <div class="row" style="margin-top:10px;">
         <button id="btnPrintReport" style="width:100%;justify-content:center;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9V3h12v6M6 18H4a1 1 0 01-1-1v-5a1 1 0 011-1h16a1 1 0 011 1v5a1 1 0 01-1 1h-2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><rect x="6" y="14" width="12" height="7" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
@@ -2008,7 +2011,8 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     prProjectTitle: document.getElementById('prProjectTitle').value,
     prClient: document.getElementById('prClient').value,
     prDrawingNo: document.getElementById('prDrawingNo').value,
-    prDrawnBy: document.getElementById('prDrawnBy').value
+    prDrawnBy: document.getElementById('prDrawnBy').value,
+    prXsInterval: document.getElementById('prXsInterval').value
   };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -2045,6 +2049,7 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
     document.getElementById('prClient').value = data.prClient || '';
     document.getElementById('prDrawingNo').value = data.prDrawingNo || '';
     document.getElementById('prDrawnBy').value = data.prDrawnBy || '';
+    document.getElementById('prXsInterval').value = data.prXsInterval || '';
     unitSystem = data.unitSystem === 'imperial' ? 'imperial' : 'metric';
     document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === unitSystem));
     veMode = data.veMode || 'auto';
@@ -2341,27 +2346,47 @@ async function generatePdfReport(){
     const northArrowHtml = '<div class="pr-north-arrow"><svg width="14" height="16" viewBox="0 0 14 16" fill="none"><path d="M7 0L13 12H1L7 0Z" fill="#1a1a2e"/></svg>N</div>';
     const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
 
-    // Cross-sections at the deepest cut and deepest fill stations - fetched fresh so the report is
-    // self-contained regardless of whether the Cross Section panel had anything open at all.
-    let xsHtml = '';
+    // Cross-sections - either at the deepest cut/fill stations (default) or at a fixed interval the
+    // user chooses (prXsInterval), paginated across as many sheets as needed. Fetched fresh so the
+    // report is self-contained regardless of whether the Cross Section panel had anything open.
+    let xsCards = [], xsIntervalLabel = '';
     if(designGrade){
-      const { maxCut, maxFill } = computeCutFillStats();
+      const totalLen = profile[profile.length-1].dist;
+      const intervalM = parseFloat(document.getElementById('prXsInterval').value);
+      const useInterval = intervalM > 0;
+      let stationDists;
+      if(useInterval){
+        stationDists = [];
+        for(let d = 0; d <= totalLen + 1e-6; d += intervalM) stationDists.push(Math.min(d, totalLen));
+        if(stationDists.length > 40) throw new Error('cross-section interval too small — ' + stationDists.length + ' stations would be generated (max 40). Try a larger interval.');
+        xsIntervalLabel = 'Every ' + fmtDist(intervalM);
+      } else {
+        const { maxCut, maxFill } = computeCutFillStats();
+        stationDists = [maxCut, maxFill].filter(Boolean).map(s => s.dist);
+        xsIntervalLabel = 'At Critical Stations';
+      }
       const bufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
-      const entries = [['Max Cut', maxCut], ['Max Fill', maxFill]].filter(([, station]) => station);
-      const settled = await Promise.allSettled(entries.map(([label, station]) =>
-        fetchCrossSection(station.dist, bufferM).then(xsPoints => ({ label, station, xsPoints }))
+      const settled = await Promise.allSettled(stationDists.map(dist =>
+        fetchCrossSection(dist, bufferM).then(xsPoints => ({ dist, xsPoints }))
       ));
-      const cards = [];
       settled.forEach(r => {
         if(r.status !== 'fulfilled') return; // best-effort - a failed fetch here just means one fewer card, not a failed report
-        const { label, station, xsPoints } = r.value;
-        const svg = buildStaticCrossSectionSVG(xsPoints, station.dist, 400, 210);
-        if(svg) cards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+label+' — '+fmtStation(station.dist)+' ('+fmtElev(station.amount)+')</div>'+svg+'</div>');
+        const { dist, xsPoints } = r.value;
+        const svg = buildStaticCrossSectionSVG(xsPoints, dist, 400, 210);
+        if(!svg) return;
+        const p = profilePointAtDist(dist);
+        let title = fmtStation(dist);
+        if(p && p.elev != null){
+          const diff = p.elev - designElevAt(dist);
+          if(Math.abs(diff) > 0.01) title += ' — ' + (diff > 0 ? 'Cut ' : 'Fill ') + fmtElev(Math.abs(diff));
+        }
+        xsCards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+title+'</div>'+svg+'</div>');
       });
-      xsHtml = cards.length ? '<div class="pr-xs-row">'+cards.join('')+'</div>' : '';
     }
-    const hasXsSheet = xsHtml !== '';
-    const totalSheets = hasXsSheet ? 3 : 2;
+    const CARDS_PER_SHEET = 6; // 2 cols x 3 rows fits one Letter sheet at this card aspect ratio
+    const xsSheetGroups = [];
+    for(let i=0; i<xsCards.length; i+=CARDS_PER_SHEET) xsSheetGroups.push(xsCards.slice(i, i+CARDS_PER_SHEET));
+    const totalSheets = 2 + xsSheetGroups.length;
 
     // Clones keep their source id attributes, which would collide with the live #statsGrid/#cutFillStats/
     // chart svg once inserted into #printReport (which sits before #main in the document) - getElementById
@@ -2381,8 +2406,9 @@ async function generatePdfReport(){
     const attribution = 'Ground elevation: Ontario LiDAR DTM (Land Information Ontario), 0.5m resolution. Aerial imagery: Ontario Orthophotography (LIO). Vertical datum CGVD2013, horizontal WGS84. Generated by Contour.';
 
     // One .pr-page per sheet - each a bordered drawing frame with its own title block (standard
-    // multi-sheet drawing-set convention), rather than one long continuously-flowing page. Sheet 3
-    // (cross-sections) only exists when there's a design grade to have critical stations from.
+    // multi-sheet drawing-set convention), rather than one long continuously-flowing page. Sheets 3+
+    // (cross-sections) only exist when there's a design grade to have stations from, and there can
+    // be more than one of them once an interval produces more cards than fit on a single sheet.
     const sheet1 =
       '<div class="pr-page">' +
         '<div class="pr-sheet-title">Location Plan<span class="pr-sheet-sub">Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</span></div>' +
@@ -2403,15 +2429,18 @@ async function generatePdfReport(){
         '</div>' +
         buildTitleBlock('Elevation Profile', 2, totalSheets) +
       '</div>';
-    const sheet3 = hasXsSheet ?
-      '<div class="pr-page">' +
-        '<div class="pr-sheet-title">Cross Sections<span class="pr-sheet-sub">At Critical Stations</span></div>' +
-        '<div class="pr-sheet-content">' + xsHtml + '</div>' +
-        buildTitleBlock('Cross Sections', 3, totalSheets) +
-      '</div>' : '';
+    const xsSheets = xsSheetGroups.map((cards, idx) => {
+      const sheetNum = 3 + idx;
+      const subLabel = xsSheetGroups.length > 1 ? (xsIntervalLabel + ' · Sheet ' + (idx+1) + ' of ' + xsSheetGroups.length) : xsIntervalLabel;
+      return '<div class="pr-page">' +
+        '<div class="pr-sheet-title">Cross Sections<span class="pr-sheet-sub">' + subLabel + '</span></div>' +
+        '<div class="pr-sheet-content"><div class="pr-xs-row">' + cards.join('') + '</div></div>' +
+        buildTitleBlock('Cross Sections', sheetNum, totalSheets) +
+      '</div>';
+    }).join('');
 
     const container = document.getElementById('printReport');
-    container.innerHTML = sheet1 + sheet2 + sheet3;
+    container.innerHTML = sheet1 + sheet2 + xsSheets;
 
     const img = document.getElementById('prMapImg');
     if(img && !img.complete){
