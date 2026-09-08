@@ -516,40 +516,42 @@
   .pr-scale-bar .pr-scale-line::after{ right:0; }
   /* Info panel - full-height right-side strip: firm identity, key plan, client/project/drawing
      identity, data source, approvals, P.Eng seal, scale, revisions, and a drawing/sheet/rev grid
-     pinned to the bottom - the layout of a real consulting-engineering title sheet, not a thin
-     bottom bar. Sized as a fraction of the PAGE (not the main column) via flex-basis, so it scales
-     with whichever sheet size is chosen rather than needing per-size tuning of its own. */
+     pinned to the bottom - the layout of a real consulting-engineering title sheet (this convention
+     - a full-height strip rather than only a bottom-right block - is well established specifically
+     for civil/site drawing sets, confirmed against real title-block references). Width is a genuine
+     physical size per sheet (--pr-panel-w, set by applySheetSizeCss from PR_PANEL_WIDTH_IN) rather
+     than a flat fraction of the page - real title blocks don't grow linearly with sheet size either. */
   .pr-infopanel{
-    flex:0 0 19%; border-left:1.25pt solid #1a1a2e; padding:3mm 2.6mm; box-sizing:border-box;
-    display:flex; flex-direction:column; font-size:6.2px; color:#161824; overflow:hidden;
+    flex:0 0 var(--pr-panel-w, 82.5mm); border-left:1.25pt solid #1a1a2e; padding:3.5mm 3mm; box-sizing:border-box;
+    display:flex; flex-direction:column; font-size:7.5px; color:#161824; overflow:hidden;
   }
-  .pr-ip-firm{ text-align:center; padding-bottom:2.2mm; border-bottom:0.75pt solid #1a1a2e; margin-bottom:2.2mm; }
-  .pr-ip-firm .pr-ip-mark{ width:14px; height:14px; border-radius:4px; background:linear-gradient(135deg,#6a6af5,#4747d6); display:inline-flex; align-items:center; justify-content:center; margin-bottom:2px; }
-  .pr-ip-firm .pr-ip-name{ font-size:8.5px; font-weight:800; line-height:1.2; }
-  .pr-ip-firm .pr-ip-tag{ font-size:4.6px; font-weight:700; letter-spacing:0.6px; color:#6b7080; text-transform:uppercase; margin-top:1px; }
-  .pr-ip-firm .pr-ip-contact{ font-size:5px; color:#3a3f4e; margin-top:2px; line-height:1.5; }
-  .pr-ip-section{ margin-bottom:2.2mm; }
-  .pr-ip-label{ font-size:4.6px; font-weight:700; color:#6b7080; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:0.6mm; }
-  .pr-ip-value{ font-size:6.6px; font-weight:700; color:#161824; line-height:1.3; word-break:break-word; }
-  .pr-ip-keyplan{ border:0.5pt solid #1a1a2e; position:relative; aspect-ratio:1.35; overflow:hidden; margin-bottom:1mm; background:#eef0f6; }
+  .pr-ip-firm{ text-align:center; padding-bottom:2.6mm; border-bottom:0.75pt solid #1a1a2e; margin-bottom:2.6mm; }
+  .pr-ip-firm .pr-ip-mark{ width:18px; height:18px; border-radius:5px; background:linear-gradient(135deg,#6a6af5,#4747d6); display:inline-flex; align-items:center; justify-content:center; margin-bottom:3px; }
+  .pr-ip-firm .pr-ip-name{ font-size:11px; font-weight:800; line-height:1.2; }
+  .pr-ip-firm .pr-ip-tag{ font-size:5.6px; font-weight:700; letter-spacing:0.6px; color:#6b7080; text-transform:uppercase; margin-top:1.5px; }
+  .pr-ip-firm .pr-ip-contact{ font-size:6.2px; color:#3a3f4e; margin-top:3px; line-height:1.5; }
+  .pr-ip-section{ margin-bottom:2.6mm; }
+  .pr-ip-label{ font-size:5.6px; font-weight:700; color:#6b7080; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:0.8mm; }
+  .pr-ip-value{ font-size:8px; font-weight:700; color:#161824; line-height:1.3; word-break:break-word; }
+  .pr-ip-keyplan{ border:0.5pt solid #1a1a2e; position:relative; aspect-ratio:1.35; overflow:hidden; margin-bottom:1.2mm; background:#eef0f6; }
   .pr-ip-keyplan img{ display:block; width:100%; height:100%; object-fit:cover; }
   .pr-ip-keyplan svg{ position:absolute; inset:0; width:100%; height:100%; }
-  .pr-ip-keyplan-n{ position:absolute; top:1.5px; right:2px; font-size:4.2px; font-weight:800; background:rgba(255,255,255,0.85); border-radius:2px; padding:0.5px 1.5px; }
-  .pr-ip-datasource div{ font-size:4.8px; color:#3a3f4e; line-height:1.55; }
-  .pr-ip-table{ width:100%; border-collapse:collapse; font-size:4.6px; }
-  .pr-ip-table th, .pr-ip-table td{ border:0.35pt solid #c7ccdb; padding:0.8px 1.8px; text-align:left; }
-  .pr-ip-table th{ font-weight:700; color:#6b7080; text-transform:uppercase; font-size:4.2px; }
-  .pr-ip-seal{ text-align:center; padding:1.5mm 0 2mm; }
-  .pr-ip-seal-circle{ width:16mm; height:16mm; border-radius:50%; border:0.5pt dashed #9ca3af; margin:0 auto 1mm; display:flex; align-items:center; justify-content:center; font-size:4.6px; font-weight:600; color:#9ca3af; letter-spacing:1px; }
-  .pr-ip-seal-note{ font-size:3.8px; color:#9ca3af; letter-spacing:0.2px; }
+  .pr-ip-keyplan-n{ position:absolute; top:2px; right:3px; font-size:5.2px; font-weight:800; background:rgba(255,255,255,0.85); border-radius:2px; padding:0.5px 2px; }
+  .pr-ip-datasource div{ font-size:6px; color:#3a3f4e; line-height:1.6; }
+  .pr-ip-table{ width:100%; border-collapse:collapse; font-size:5.8px; }
+  .pr-ip-table th, .pr-ip-table td{ border:0.35pt solid #c7ccdb; padding:1.2px 2.4px; text-align:left; }
+  .pr-ip-table th{ font-weight:700; color:#6b7080; text-transform:uppercase; font-size:5.2px; }
+  .pr-ip-seal{ text-align:center; padding:2mm 0 2.5mm; }
+  .pr-ip-seal-circle{ width:19mm; height:19mm; border-radius:50%; border:0.5pt dashed #9ca3af; margin:0 auto 1.2mm; display:flex; align-items:center; justify-content:center; font-size:5.6px; font-weight:600; color:#9ca3af; letter-spacing:1px; }
+  .pr-ip-seal-note{ font-size:4.6px; color:#9ca3af; letter-spacing:0.2px; }
   .pr-ip-scale-row{ display:flex; justify-content:space-between; align-items:baseline; }
-  .pr-ip-scale-row .pr-ip-scale-label{ font-size:5px; color:#6b7080; }
-  .pr-ip-scale-row .pr-ip-scale-value{ font-size:6.8px; font-weight:700; }
-  .pr-ip-scale-bar-h{ height:2.4px; margin:1mm 0 1px; background-image:linear-gradient(to right, #1a1a2e 50%, #fff 50%); background-size:25% 100%; border:0.35pt solid #1a1a2e; }
-  .pr-ip-scale-ticks{ display:flex; justify-content:space-between; font-size:4px; color:#6b7080; }
-  .pr-ip-idgrid{ margin-top:auto; border-top:0.75pt solid #1a1a2e; padding-top:1.6mm; display:grid; grid-template-columns:1fr 1fr; gap:1.2mm 1.6mm; }
-  .pr-ip-idgrid .pr-ip-idcell .pr-ip-label{ margin-bottom:0.3mm; }
-  .pr-ip-idgrid .pr-ip-idcell.pr-ip-drawingno .pr-ip-value{ font-size:9px; font-weight:800; }
+  .pr-ip-scale-row .pr-ip-scale-label{ font-size:6px; color:#6b7080; }
+  .pr-ip-scale-row .pr-ip-scale-value{ font-size:8.2px; font-weight:700; }
+  .pr-ip-scale-bar-h{ height:2.8px; margin:1.2mm 0 1px; background-image:linear-gradient(to right, #1a1a2e 50%, #fff 50%); background-size:25% 100%; border:0.35pt solid #1a1a2e; }
+  .pr-ip-scale-ticks{ display:flex; justify-content:space-between; font-size:4.8px; color:#6b7080; }
+  .pr-ip-idgrid{ margin-top:auto; border-top:0.75pt solid #1a1a2e; padding-top:2mm; display:grid; grid-template-columns:1fr 1fr; gap:1.5mm 2mm; }
+  .pr-ip-idgrid .pr-ip-idcell .pr-ip-label{ margin-bottom:0.4mm; }
+  .pr-ip-idgrid .pr-ip-idcell.pr-ip-drawingno .pr-ip-value{ font-size:12px; font-weight:800; }
   .pr-ip-idgrid .pr-ip-idcell.pr-ip-full{ grid-column:1 / -1; }
   .toolbar-group{display:flex;align-items:center;gap:8px;}
   .toolbar-divider{width:1px;align-self:stretch;background:var(--border-strong);margin:2px 0;}
@@ -940,13 +942,8 @@
           <select id="prSheetSize">
             <option value="tabloid">Tabloid (11×17 in)</option>
             <option value="archD">Arch D (24×36 in)</option>
-            <option value="custom">Custom…</option>
           </select>
         </div>
-      </div>
-      <div class="row" id="prCustomSizeRow" style="display:none;margin-top:8px;gap:8px;">
-        <div class="gp-field"><label>Width (in)</label><input type="number" id="prCustomW" min="4" step="0.5" value="11"></div>
-        <div class="gp-field"><label>Height (in)</label><input type="number" id="prCustomH" min="4" step="0.5" value="17"></div>
       </div>
       <div class="row" style="margin-top:8px;gap:8px;">
         <div class="gp-field"><label>Cross-Section Interval (m)</label><input type="number" id="prXsInterval" min="1" step="1" value="20" placeholder="blank = critical stations only"></div>
@@ -2078,8 +2075,6 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     prDrawingNo: document.getElementById('prDrawingNo').value,
     prDrawnBy: document.getElementById('prDrawnBy').value,
     prSheetSize: document.getElementById('prSheetSize').value,
-    prCustomW: document.getElementById('prCustomW').value,
-    prCustomH: document.getElementById('prCustomH').value,
     prXsInterval: document.getElementById('prXsInterval').value
   };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
@@ -2120,10 +2115,7 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
     document.getElementById('prProjectNo').value = data.prProjectNo || '';
     document.getElementById('prDrawingNo').value = data.prDrawingNo || '';
     document.getElementById('prDrawnBy').value = data.prDrawnBy || '';
-    document.getElementById('prSheetSize').value = data.prSheetSize || 'tabloid';
-    document.getElementById('prCustomW').value = data.prCustomW || '11';
-    document.getElementById('prCustomH').value = data.prCustomH || '17';
-    document.getElementById('prCustomSizeRow').style.display = document.getElementById('prSheetSize').value === 'custom' ? 'flex' : 'none';
+    document.getElementById('prSheetSize').value = SHEET_SIZES[data.prSheetSize] ? data.prSheetSize : 'tabloid';
     document.getElementById('prXsInterval').value = data.prXsInterval || '';
     unitSystem = data.unitSystem === 'imperial' ? 'imperial' : 'metric';
     document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === unitSystem));
@@ -2321,36 +2313,37 @@ function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
 
 // Sheet size options for the PDF report, in inches - real North American engineering drawing sizes,
 // not a fixed Letter default (a real drawing set this size runs Tabloid+ up in practice). Chosen via
-// #prSheetSize; 'custom' reads real inches from #prCustomW/#prCustomH instead of a table entry.
+// #prSheetSize.
 const SHEET_SIZES = {
   tabloid: { label: 'Tabloid (11×17 in)', wIn: 11, hIn: 17 },
   archD: { label: 'Arch D (24×36 in)', wIn: 24, hIn: 36 }
 };
 const PR_MARGIN_IN = 0.5;
-// The main-content/info-panel px-per-mm ratio, empirically tuned against the original Letter-portrait
-// report (imgW=860 at a ~178mm content width) - kept as a constant so a bigger chosen sheet renders
-// its content at a genuinely bigger/clearer scale rather than just the same content stretched thinner.
+// The main-content px-per-mm ratio, empirically tuned against the original Letter-portrait report
+// (imgW=860 at a ~178mm content width) - kept as a constant so a bigger chosen sheet renders its
+// content at a genuinely bigger/clearer scale rather than just the same content stretched thinner.
 const PR_PX_PER_MM = 4.84;
-const PR_PANEL_FRACTION = 0.19; // info panel's share of each sheet's usable (post-margin) width
+// A real title block/info panel is a roughly fixed physical width, not a flat fraction of the page -
+// some drafting standards fix it outright (ISO's is ~100mm regardless of sheet size), others grow it
+// modestly for bigger sheets, but never linearly with page width (a flat fraction made it comically
+// narrow/cramped on Tabloid and oversized on Arch D). Tuned in inches for the two sizes this app
+// offers, per real title-block proportion references, not guessed.
+const PR_PANEL_WIDTH_IN = { tabloid: 3.25, archD: 4.5 };
 
 function currentSheetSize(){
   const key = document.getElementById('prSheetSize').value;
-  if(key === 'custom'){
-    const wIn = parseFloat(document.getElementById('prCustomW').value) || 11;
-    const hIn = parseFloat(document.getElementById('prCustomH').value) || 17;
-    return { label: 'Custom (' + wIn + '×' + hIn + ' in)', wIn, hIn };
-  }
   return SHEET_SIZES[key] || SHEET_SIZES.tabloid;
 }
-document.getElementById('prSheetSize').addEventListener('change', () => {
-  document.getElementById('prCustomSizeRow').style.display = document.getElementById('prSheetSize').value === 'custom' ? 'flex' : 'none';
-});
+function panelWidthIn(){
+  const key = document.getElementById('prSheetSize').value;
+  return PR_PANEL_WIDTH_IN[key] || PR_PANEL_WIDTH_IN.tabloid;
+}
 
 // Injects @page rules sized to the chosen sheet - portrait for most sheets, landscape (.pr-landscape)
-// for Plan & Profile - overriding the static Letter default declared earlier in the stylesheet (a
-// later same-name @page rule wins in CSS Paged Media). Also sets --pr-page-h/--pr-page-h-ls custom
-// properties so .pr-page's min-height matches the real chosen page's content-box height instead of
-// staying hardcoded to Letter's.
+// for sheets that want it - overriding the static Letter default declared earlier in the stylesheet
+// (a later same-name @page rule wins in CSS Paged Media). Also sets --pr-page-h/--pr-page-h-ls/
+// --pr-panel-w custom properties so .pr-page's min-height and .pr-infopanel's width match the real
+// chosen page instead of staying hardcoded to Letter's.
 function applySheetSizeCss(){
   const size = currentSheetSize();
   const marginMM = PR_MARGIN_IN * 25.4;
@@ -2358,6 +2351,7 @@ function applySheetSizeCss(){
   const landscapeHmm = size.wIn*25.4 - 2*marginMM;
   document.documentElement.style.setProperty('--pr-page-h', portraitHmm.toFixed(1) + 'mm');
   document.documentElement.style.setProperty('--pr-page-h-ls', landscapeHmm.toFixed(1) + 'mm');
+  document.documentElement.style.setProperty('--pr-panel-w', (panelWidthIn()*25.4).toFixed(1) + 'mm');
   const css = '@media print{' +
     '@page{ size:' + size.wIn + 'in ' + size.hIn + 'in; margin:' + PR_MARGIN_IN + 'in; }' +
     '@page pr-landscape-page{ size:' + size.hIn + 'in ' + size.wIn + 'in; margin:' + PR_MARGIN_IN + 'in; }' +
@@ -2368,16 +2362,16 @@ function applySheetSizeCss(){
 
 // The real usable "main content" width, in abstract px units at PR_PX_PER_MM, for a sheet of the
 // chosen size - i.e. everything inside the @page margin, the .pr-page border, the info panel (a
-// fixed fraction of the page, not of the main area, so it doesn't shrink disproportionately on
-// smaller sheets), and the main column's own internal padding. Used in place of what used to be a
-// flat imgW=860/ppW=1160 constant everywhere the report builds a map/chart/card at "full width".
+// fixed real width, not a fraction of the main area), and the main column's own internal padding.
+// Used in place of what used to be a flat imgW=860/ppW=1160 constant everywhere the report builds a
+// map/chart/card at "full width".
 function mainContentWidthPx(landscape){
   const size = currentSheetSize();
   const marginMM = PR_MARGIN_IN * 25.4;
   const pageWmm = (landscape ? size.hIn : size.wIn) * 25.4;
   const usableMM = pageWmm - 2*marginMM;
-  const panelMM = usableMM * PR_PANEL_FRACTION;
-  const paddingMM = 7 + 6 + 3; // .pr-main's own l/r padding + a bit for the panel's border/padding
+  const panelMM = panelWidthIn() * 25.4;
+  const paddingMM = 7 + 6 + 4; // .pr-main's own l/r padding + the panel's own l/r padding/border
   const mainMM = Math.max(60, usableMM - panelMM - paddingMM);
   return Math.round(mainMM * PR_PX_PER_MM);
 }
@@ -2561,23 +2555,19 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
 // Real physical width (mm) of the info panel's own content area (inside its border/padding) for the
 // chosen sheet size - used to size the scale bar graphic to what will actually fit there, and to
 // convert a real-world span (metres) into a genuine "1:N" ratio for whatever content sits in .pr-main.
-function panelContentWidthMM(landscape){
-  const size = currentSheetSize();
-  const marginMM = PR_MARGIN_IN * 25.4;
-  const pageWmm = (landscape ? size.hIn : size.wIn) * 25.4;
-  const usableMM = pageWmm - 2*marginMM;
-  return Math.max(20, usableMM * PR_PANEL_FRACTION - 5.2);
+function panelContentWidthMM(){
+  return Math.max(20, panelWidthIn()*25.4 - 5.2);
 }
 
 // A real "1:N" scale for a drawing spanning realMeters across contentWidthPx of .pr-main content
 // (at PR_PX_PER_MM), plus a scale-bar graphic sized to genuinely match it, not just a fixed-looking
 // decoration - since a bigger chosen sheet really does put the same content at a bigger/clearer
 // scale (smaller N), this label is an honest, real number, not a static guess.
-function computeScaleInfo(realMeters, contentWidthPx, landscape){
+function computeScaleInfo(realMeters, contentWidthPx){
   const contentWidthMM = contentWidthPx / PR_PX_PER_MM;
   const metresPerMM = realMeters / contentWidthMM;
   const ratio = Math.round(metresPerMM * 1000);
-  const panelMM = panelContentWidthMM(landscape);
+  const panelMM = panelContentWidthMM();
   const niceBarMeters = niceGridSpacing(panelMM * metresPerMM * 0.85, 1);
   const barPercent = Math.min(100, (niceBarMeters / metresPerMM) / panelMM * 100);
   return { ratio, metresPerMM, barMeters: niceBarMeters, barPercent };
@@ -2757,7 +2747,7 @@ async function generatePdfReport(){
     const barPx = barMeters / finalBboxW * imgW;
     const northArrowHtml = '<div class="pr-north-arrow"><svg width="14" height="16" viewBox="0 0 14 16" fill="none"><path d="M7 0L13 12H1L7 0Z" fill="#1a1a2e"/></svg>N</div>';
     const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
-    const locationPlanScale = computeScaleInfo(finalBboxW, imgW, locationPlanLandscape);
+    const locationPlanScale = computeScaleInfo(finalBboxW, imgW);
 
     // Key plan for the info panel - the exact same aerial asset as the Location Plan sheet above,
     // just shown small with a plain line/dots (no station ticks - illegible at this size, just
@@ -2792,8 +2782,8 @@ async function generatePdfReport(){
     const profileSvg = buildStaticProfileSVG(profile, ppW, ppPad, ppProfileH);
     const { yMinM: ppYMin, yMaxM: ppYMax } = computeChartYRange(profile, 0, totalLen);
     const planProfileScale = {
-      h: computeScaleInfo(totalLen, ppW - ppPad.l - ppPad.r, true),
-      v: computeScaleInfo(ppYMax - ppYMin, ppProfileH - 34, true)
+      h: computeScaleInfo(totalLen, ppW - ppPad.l - ppPad.r),
+      v: computeScaleInfo(ppYMax - ppYMin, ppProfileH - 34)
     };
     const ppXStep = niceGridSpacing(totalLen, 8);
     // The centerline sits exactly at y=ppPlanH/2 by construction (station is the x-axis, lateral
