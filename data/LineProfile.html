@@ -511,10 +511,13 @@
   .pr-xs-card .pr-xs-title{ font-size:11px; font-weight:700; margin-bottom:6px; }
   .pr-xs-card svg{ display:block; width:100%; height:auto; }
   .pr-footer{ margin-top:16px; font-size:9px; color:#9599a8; line-height:1.5; }
-  .pr-north-arrow{ position:absolute; top:6px; right:6px; background:rgba(255,255,255,0.88); border-radius:4px; padding:3px 6px; text-align:center; font-size:10px; font-weight:800; }
-  .pr-scale-bar{ position:absolute; bottom:6px; left:6px; background:rgba(255,255,255,0.88); border-radius:4px; padding:4px 8px; font-size:8.5px; font-weight:700; }
-  .pr-scale-bar .pr-scale-line{ height:3px; background:#1a1a2e; margin-top:3px; position:relative; }
-  .pr-scale-bar .pr-scale-line::before, .pr-scale-bar .pr-scale-line::after{ content:''; position:absolute; top:-3px; width:2px; height:9px; background:#1a1a2e; }
+  /* Real physical (mm) sizing, not raw px - the map image itself is now sized to fill most of the
+     sheet, and a handful of raw pixels for these fixtures read as barely-there at that scale. */
+  .pr-north-arrow{ position:absolute; top:7mm; right:7mm; width:19mm; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.3)); }
+  .pr-north-arrow svg{ display:block; width:100%; height:auto; }
+  .pr-scale-bar{ position:absolute; bottom:7mm; left:7mm; background:rgba(255,255,255,0.92); border:0.5pt solid #1a1a2e; border-radius:3px; padding:2.2mm 4mm; font-size:12px; font-weight:700; }
+  .pr-scale-bar .pr-scale-line{ height:4px; background:#1a1a2e; margin-top:3.5px; position:relative; }
+  .pr-scale-bar .pr-scale-line::before, .pr-scale-bar .pr-scale-line::after{ content:''; position:absolute; top:-4px; width:2.5px; height:12px; background:#1a1a2e; }
   .pr-scale-bar .pr-scale-line::before{ left:0; }
   .pr-scale-bar .pr-scale-line::after{ right:0; }
   /* Bottom title block (.pr-tb2) - the classic engineering-drawing layout: a north arrow and a small
@@ -524,19 +527,22 @@
      panel, which turned out not to be what this app should look like. margin-top:auto pins it to the
      bottom of .pr-page regardless of how much (or little) content sits above it. */
   .pr-tb2{ margin-top:auto; padding-top:5mm; }
-  .pr-tb2-top{ display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:2mm; }
+  /* A real gap (not 2mm) between the amendments table and the grid below - at 2mm the table's own
+     bottom border and the grid's top border sat close enough together to read as one confusing
+     "double line" hovering above Drawn By, rather than two clearly separate elements. */
+  .pr-tb2-top{ display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:4.5mm; }
   .pr-tb2-compass{ width:13mm; flex:none; }
   .pr-tb2-compass svg{ display:block; width:100%; height:auto; }
   .pr-tb2-rev{ width:46%; }
-  .pr-tb2-rev table{ width:100%; border-collapse:collapse; border:0.75pt solid #1a1a2e; font-size:6.2px; }
+  .pr-tb2-rev table{ width:100%; border-collapse:collapse; border:0.75pt solid #1a1a2e; font-size:6.8px; }
   .pr-tb2-rev th, .pr-tb2-rev td{ border:0.4pt solid #1a1a2e; padding:1px 3px; text-align:left; height:3mm; }
-  .pr-tb2-amend-hdr{ text-align:center!important; font-weight:700; letter-spacing:0.6px; font-size:5.6px; text-transform:uppercase; color:#6b7080; }
+  .pr-tb2-amend-hdr{ text-align:center!important; font-weight:700; letter-spacing:0.6px; font-size:6px; text-transform:uppercase; color:#6b7080; }
   .pr-tb2-grid{
     display:grid; border:1.25pt solid #1a1a2e;
     grid-template-columns:2.6fr 1fr 1fr 1.2fr 2.3fr;
     grid-template-areas:"site scale date drawnby firm" "title projno drawno sheetno firm";
   }
-  .pr-tb2-cell{ border-top:0.75pt solid #1a1a2e; border-right:0.75pt solid #1a1a2e; padding:1.8mm 2.8mm; min-width:0; overflow:hidden; }
+  .pr-tb2-cell{ border-top:0.75pt solid #1a1a2e; border-right:0.75pt solid #1a1a2e; padding:2mm 3mm; min-width:0; overflow:hidden; }
   .pr-tb2-grid > .pr-tb2-cell:nth-child(1), .pr-tb2-grid > .pr-tb2-cell:nth-child(2), .pr-tb2-grid > .pr-tb2-cell:nth-child(3){ border-top:none; }
   .pr-tb2-c-site{ grid-area:site; }
   .pr-tb2-c-scale{ grid-area:scale; }
@@ -546,14 +552,16 @@
   .pr-tb2-c-projno{ grid-area:projno; }
   .pr-tb2-c-drawno{ grid-area:drawno; }
   .pr-tb2-c-sheetno{ grid-area:sheetno; border-right:none; }
-  .pr-tb2-c-firm{ grid-area:firm; border-right:none; border-top:none; display:flex; align-items:center; gap:2.5mm; padding:2mm 3mm; }
-  .pr-tb2-label{ font-size:6px; font-weight:700; color:#6b7080; text-transform:uppercase; letter-spacing:0.3px; display:block; }
-  .pr-tb2-value{ font-size:8.5px; font-weight:600; color:#161824; margin-top:0.8mm; line-height:1.25; word-break:break-word; }
-  .pr-tb2-c-title .pr-tb2-value{ font-size:10px; font-weight:700; }
+  /* border-left was missing entirely here (no rule set it, and the neighbouring cell's own
+     border-right was also removed) - the firm block visually floated with no divider from Drawn By. */
+  .pr-tb2-c-firm{ grid-area:firm; border-left:0.75pt solid #1a1a2e; border-right:none; border-top:none; display:flex; align-items:center; gap:3mm; padding:2mm 3.5mm; }
+  .pr-tb2-label{ font-size:6.8px; font-weight:700; color:#6b7080; text-transform:uppercase; letter-spacing:0.3px; display:block; }
+  .pr-tb2-value{ font-size:9.5px; font-weight:600; color:#161824; margin-top:1mm; line-height:1.25; word-break:break-word; }
+  .pr-tb2-c-title .pr-tb2-value{ font-size:11px; font-weight:700; }
   .pr-tb2-c-sheetno .pr-tb2-value{ font-weight:800; }
-  .pr-tb2-logo{ width:11mm; height:11mm; border-radius:50%; flex:none; background:linear-gradient(135deg,#6a6af5,#4747d6); display:flex; align-items:center; justify-content:center; }
-  .pr-tb2-firmname{ font-size:11.5px; font-weight:800; line-height:1.2; }
-  .pr-tb2-firmcontact{ font-size:6.8px; color:#3a3f4e; line-height:1.5; margin-top:1mm; }
+  .pr-tb2-logo{ width:12mm; height:12mm; border-radius:50%; flex:none; background:linear-gradient(135deg,#6a6af5,#4747d6); display:flex; align-items:center; justify-content:center; }
+  .pr-tb2-firmname{ font-size:13px; font-weight:800; line-height:1.2; }
+  .pr-tb2-firmcontact{ font-size:7.5px; color:#3a3f4e; line-height:1.5; margin-top:1mm; }
   .toolbar-group{display:flex;align-items:center;gap:8px;}
   .toolbar-divider{width:1px;align-self:stretch;background:var(--border-strong);margin:2px 0;}
   .layer-toggle-group{border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;gap:0;}
@@ -2242,6 +2250,7 @@ async function exportLidarCorridor(){
 // which draws it as an SVG string) - keeping this one place means a future fix to the search/template
 // logic can't silently apply to one renderer and not the other.
 function computeChannelTemplate(stationDist, xsPoints){
+  if(!designGrade) return null;
   const centreGround = profilePointAtDist(stationDist);
   if(!centreGround || centreGround.elev == null) return null;
   const designElevHere = designElevAt(stationDist);
@@ -2273,10 +2282,14 @@ function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
   const pad = { l: 44, r: 10, t: 10, b: 22 };
   const valid = xsPoints.filter(p => p.elev != null);
   if(!valid.length) return '';
-  const designElevHere = designElevAt(stationDist);
+  // Cross-sections print with or without a design grade now - designElevHere stays null when there
+  // isn't one, and every place below that draws the design-line/cut-fill-shape overlay just skips.
+  const designElevHere = designGrade ? designElevAt(stationDist) : null;
   let realMin = Math.min(...valid.map(p=>p.elev)), realMax = Math.max(...valid.map(p=>p.elev));
-  if(designElevHere < realMin) realMin = designElevHere;
-  if(designElevHere > realMax) realMax = designElevHere;
+  if(designElevHere != null){
+    if(designElevHere < realMin) realMin = designElevHere;
+    if(designElevHere > realMax) realMax = designElevHere;
+  }
   const span = Math.max(realMax-realMin, 0.5);
   const yMin = realMin - span*0.12, yMax = realMax + span*0.12;
   const xMin = xsPoints[0].offset, xMax = xsPoints[xsPoints.length-1].offset;
@@ -2305,7 +2318,9 @@ function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
   }
 
   svg += '<path d="'+d+'" fill="none" stroke="#4747d6" stroke-width="2"/>';
-  svg += '<line x1="'+X(xMin)+'" x2="'+X(xMax)+'" y1="'+Y(designElevHere)+'" y2="'+Y(designElevHere)+'" stroke="#c2660a" stroke-width="1.5" stroke-dasharray="5,3"/>';
+  if(designElevHere != null){
+    svg += '<line x1="'+X(xMin)+'" x2="'+X(xMax)+'" y1="'+Y(designElevHere)+'" y2="'+Y(designElevHere)+'" stroke="#c2660a" stroke-width="1.5" stroke-dasharray="5,3"/>';
+  }
   svg += '<line x1="'+X(0)+'" x2="'+X(0)+'" y1="'+pad.t+'" y2="'+(h-pad.b)+'" stroke="#c7cbdb" stroke-width="1" stroke-dasharray="2,2"/>';
   svg += '<line x1="'+pad.l+'" x2="'+(w-pad.r)+'" y1="'+(h-pad.b)+'" y2="'+(h-pad.b)+'" stroke="#c7cbdb" stroke-width="1"/>';
   svg += '</svg>';
@@ -2327,7 +2342,7 @@ const PR_PX_PER_MM = 4.84;
 // Real measured height of the bottom title block (.pr-tb2: padding-top + north-arrow/amendments row
 // + the two-row Site/Scale/.../Sheet No. grid) - subtracted from every sheet's available height so
 // content never overlaps or gets squeezed by it.
-const PR_TITLEBLOCK_H_MM = 42;
+const PR_TITLEBLOCK_H_MM = 47;
 
 function currentSheetSize(){
   const key = document.getElementById('prSheetSize').value;
@@ -2647,7 +2662,7 @@ async function generatePdfReport(){
     // the map fills the column's real available height instead of stopping at a fixed aspect ratio
     // and leaving a large blank gap below it (the bbox-fit logic below already re-shapes the
     // geographic extent to match whatever aspect imgW/imgH end up implying).
-    const imgW = mainContentWidthPx(locationPlanLandscape), imgH = Math.round(mainContentHeightPx(locationPlanLandscape, 55) * 0.9);
+    const imgW = mainContentWidthPx(locationPlanLandscape), imgH = Math.round(mainContentHeightPx(locationPlanLandscape, 35) * 0.97);
     const targetAspect = imgW/imgH, bboxW = xmax-xmin, bboxH = ymax-ymin;
     if(bboxW/bboxH > targetAspect){
       const newH = bboxW/targetAspect, cy=(ymin+ymax)/2; ymin=cy-newH/2; ymax=cy+newH/2;
@@ -2709,12 +2724,17 @@ async function generatePdfReport(){
     '</svg>';
     // North arrow (the /export bbox request has no rotation parameter, so the returned image is
     // always north-up) and a real scale bar sized from the actual bbox-to-pixel ratio of that same
-    // image request - both standard fixtures on an Ontario civil location/plan sheet.
+    // image request - both standard fixtures on an Ontario civil location/plan sheet. The scale
+    // bar's length is a PERCENTAGE of the map's width, not a raw pixel value - the raw imgW "px" the
+    // map overlay is drawn in (PR_PX_PER_MM=4.84 units/mm) isn't the same scale as real CSS px, so a
+    // literal width:Npx here (unlike the SVG overlay, which viewBox-scales automatically) would have
+    // drawn a bar the wrong physical length relative to the actually-rendered map - a real accuracy
+    // bug for a fixture whose entire job is representing a true physical distance.
     const finalBboxW = xmax - xmin;
     const barMeters = niceGridSpacing(finalBboxW * 0.22, 1);
-    const barPx = barMeters / finalBboxW * imgW;
-    const northArrowHtml = '<div class="pr-north-arrow"><svg width="14" height="16" viewBox="0 0 14 16" fill="none"><path d="M7 0L13 12H1L7 0Z" fill="#1a1a2e"/></svg>N</div>';
-    const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
+    const barPercent = barMeters / finalBboxW * 100;
+    const northArrowHtml = '<div class="pr-north-arrow"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="rgba(255,255,255,0.92)" stroke="#1a1a2e" stroke-width="1.8"/><path d="M20 5 L28 25 L20 20.5 L12 25 Z" fill="#1a1a2e"/><text x="20" y="34.5" font-size="9.5" font-weight="800" text-anchor="middle" fill="#1a1a2e" font-family="Arial, sans-serif">N</text></svg></div>';
+    const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPercent.toFixed(2) + '%;"></div></div>';
     const locationPlanScale = computeScaleInfo(finalBboxW, imgW);
 
     // Plan & Profile sheet - the plan strip straightened so its horizontal axis is exactly station
@@ -2774,27 +2794,37 @@ async function generatePdfReport(){
       ? '<img src="'+planImgDataUrl+'">'
       : '<div style="padding:16px;font-size:11px;color:#9599a8;">Plan strip unavailable' + (planProfileError ? ' (' + escHtml(planProfileError) + ')' : '') + '.</div>';
 
-    // Cross-sections - the deepest cut/fill stations ALWAYS included, plus a fixed interval on top
-    // when prXsInterval is set (both together, not either/or - a cut/fill station that lands within
-    // 1m of an interval station is treated as the same one, tagged rather than duplicated), all
-    // sorted by station and paginated across as many sheets as needed. Fetched fresh so the report
-    // is self-contained regardless of whether the Cross Section panel had anything open.
+    // Cross-sections generate regardless of whether a design grade exists - previously gated behind
+    // one, since the shape/reference-line drawing used to assume it, but there's real value in
+    // seeing the raw ground cross-sections even with nothing designed yet. With a grade: the deepest
+    // cut/fill stations ALWAYS included, plus a fixed interval on top when prXsInterval is set (both
+    // together, not either/or - a cut/fill station within 1m of an interval one is treated as the
+    // same station, tagged rather than duplicated). Without a grade: the interval alone, or (if it's
+    // blank too) the same auto-spacing the live Cross Section feature uses, so a report never ends
+    // up with zero cross-sections. All sorted by station and paginated across as many sheets as
+    // needed. Fetched fresh so the report is self-contained regardless of whether the Cross Section
+    // panel had anything open.
     let xsCards = [], xsIntervalLabel = '';
-    if(designGrade){
+    {
       const intervalM = parseFloat(document.getElementById('prXsInterval').value);
       const useInterval = intervalM > 0;
-      const { maxCut, maxFill } = computeCutFillStats();
       const stationEntries = [];
-      if(maxCut) stationEntries.push({ dist: maxCut.dist, tag: 'Max Cut' });
-      if(maxFill) stationEntries.push({ dist: maxFill.dist, tag: 'Max Fill' });
+      if(designGrade){
+        const { maxCut, maxFill } = computeCutFillStats();
+        if(maxCut) stationEntries.push({ dist: maxCut.dist, tag: 'Max Cut' });
+        if(maxFill) stationEntries.push({ dist: maxFill.dist, tag: 'Max Fill' });
+      }
       if(useInterval){
         for(let d = 0; d <= totalLen + 1e-6; d += intervalM){
           const dd = Math.min(d, totalLen);
           if(!stationEntries.some(e => Math.abs(e.dist - dd) < 1)) stationEntries.push({ dist: dd, tag: null });
         }
-        xsIntervalLabel = 'Every ' + fmtDist(intervalM) + ' + Critical Stations';
-      } else {
+        xsIntervalLabel = 'Every ' + fmtDist(intervalM) + (designGrade ? ' + Critical Stations' : '');
+      } else if(designGrade){
         xsIntervalLabel = 'At Critical Stations';
+      } else {
+        computeAutoXsStations().forEach(dd => stationEntries.push({ dist: dd, tag: null }));
+        xsIntervalLabel = 'Auto-Spaced Stations';
       }
       stationEntries.sort((a,b) => a.dist - b.dist);
       // Capped generously enough that a real drainage line at a 20m interval (the field's own
@@ -2811,11 +2841,13 @@ async function generatePdfReport(){
         const { entry, xsPoints } = r.value;
         const svg = buildStaticCrossSectionSVG(xsPoints, entry.dist, 400, 210);
         if(!svg) return;
-        const p = profilePointAtDist(entry.dist);
         let title = fmtStation(entry.dist);
-        if(p && p.elev != null){
-          const diff = p.elev - designElevAt(entry.dist);
-          if(Math.abs(diff) > 0.01) title += ' — ' + (diff > 0 ? 'Cut ' : 'Fill ') + fmtElev(Math.abs(diff));
+        if(designGrade){
+          const p = profilePointAtDist(entry.dist);
+          if(p && p.elev != null){
+            const diff = p.elev - designElevAt(entry.dist);
+            if(Math.abs(diff) > 0.01) title += ' — ' + (diff > 0 ? 'Cut ' : 'Fill ') + fmtElev(Math.abs(diff));
+          }
         }
         if(entry.tag) title += ' (' + entry.tag + ')';
         xsCards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+title+'</div>'+svg+'</div>');
