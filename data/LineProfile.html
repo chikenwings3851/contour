@@ -501,6 +501,9 @@
   .pr-pp-matchlines{ position:absolute; top:0; left:0; width:100%; height:100%; }
   .pr-pp-note{ position:absolute; top:5px; left:5px; background:rgba(255,255,255,0.88); border-radius:4px; padding:3px 7px; font-size:7.5px; font-weight:600; color:#3a3f4e; max-width:60%; line-height:1.35; }
   .pr-xs-row{ display:grid; grid-template-columns:1fr 1fr; gap:11px; page-break-inside:avoid; }
+  /* Cross Sections sheets run landscape - the cards are natively wider than tall (400x210), so the
+     extra landscape width fits a 3rd column cleanly instead of leaving it as unused side margin. */
+  .pr-page.pr-landscape .pr-xs-row{ grid-template-columns:repeat(3, 1fr); }
   .pr-xs-card{ border:1px solid #d8dae8; padding:9px; }
   .pr-xs-card .pr-xs-title{ font-size:11px; font-weight:700; margin-bottom:6px; }
   .pr-xs-card svg{ display:block; width:100%; height:auto; }
@@ -935,13 +938,15 @@
         <div class="gp-field"><label>Drawn By</label><input type="text" id="prDrawnBy" placeholder="e.g. M.C."></div>
         <div class="gp-field"><label>Sheet Size</label>
           <select id="prSheetSize">
-            <option value="letter">Letter (8.5×11 in)</option>
             <option value="tabloid">Tabloid (11×17 in)</option>
-            <option value="ansiC">ANSI C (17×22 in)</option>
-            <option value="ansiD">ANSI D (22×34 in)</option>
             <option value="archD">Arch D (24×36 in)</option>
+            <option value="custom">Custom…</option>
           </select>
         </div>
+      </div>
+      <div class="row" id="prCustomSizeRow" style="display:none;margin-top:8px;gap:8px;">
+        <div class="gp-field"><label>Width (in)</label><input type="number" id="prCustomW" min="4" step="0.5" value="11"></div>
+        <div class="gp-field"><label>Height (in)</label><input type="number" id="prCustomH" min="4" step="0.5" value="17"></div>
       </div>
       <div class="row" style="margin-top:8px;gap:8px;">
         <div class="gp-field"><label>Cross-Section Interval (m)</label><input type="number" id="prXsInterval" min="1" step="1" value="20" placeholder="blank = critical stations only"></div>
@@ -2073,6 +2078,8 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     prDrawingNo: document.getElementById('prDrawingNo').value,
     prDrawnBy: document.getElementById('prDrawnBy').value,
     prSheetSize: document.getElementById('prSheetSize').value,
+    prCustomW: document.getElementById('prCustomW').value,
+    prCustomH: document.getElementById('prCustomH').value,
     prXsInterval: document.getElementById('prXsInterval').value
   };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
@@ -2113,7 +2120,10 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
     document.getElementById('prProjectNo').value = data.prProjectNo || '';
     document.getElementById('prDrawingNo').value = data.prDrawingNo || '';
     document.getElementById('prDrawnBy').value = data.prDrawnBy || '';
-    document.getElementById('prSheetSize').value = data.prSheetSize || 'letter';
+    document.getElementById('prSheetSize').value = data.prSheetSize || 'tabloid';
+    document.getElementById('prCustomW').value = data.prCustomW || '11';
+    document.getElementById('prCustomH').value = data.prCustomH || '17';
+    document.getElementById('prCustomSizeRow').style.display = document.getElementById('prSheetSize').value === 'custom' ? 'flex' : 'none';
     document.getElementById('prXsInterval').value = data.prXsInterval || '';
     unitSystem = data.unitSystem === 'imperial' ? 'imperial' : 'metric';
     document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === unitSystem));
@@ -2309,13 +2319,11 @@ function buildStaticCrossSectionSVG(xsPoints, stationDist, w, h){
   return svg;
 }
 
-// Sheet size options for the PDF report, in inches - real North American engineering drawing sizes
-// (Letter through Arch D), not just a fixed Letter default. Chosen via #prSheetSize.
+// Sheet size options for the PDF report, in inches - real North American engineering drawing sizes,
+// not a fixed Letter default (a real drawing set this size runs Tabloid+ up in practice). Chosen via
+// #prSheetSize; 'custom' reads real inches from #prCustomW/#prCustomH instead of a table entry.
 const SHEET_SIZES = {
-  letter: { label: 'Letter (8.5×11 in)', wIn: 8.5, hIn: 11 },
   tabloid: { label: 'Tabloid (11×17 in)', wIn: 11, hIn: 17 },
-  ansiC: { label: 'ANSI C (17×22 in)', wIn: 17, hIn: 22 },
-  ansiD: { label: 'ANSI D (22×34 in)', wIn: 22, hIn: 34 },
   archD: { label: 'Arch D (24×36 in)', wIn: 24, hIn: 36 }
 };
 const PR_MARGIN_IN = 0.5;
@@ -2327,8 +2335,16 @@ const PR_PANEL_FRACTION = 0.19; // info panel's share of each sheet's usable (po
 
 function currentSheetSize(){
   const key = document.getElementById('prSheetSize').value;
-  return SHEET_SIZES[key] || SHEET_SIZES.letter;
+  if(key === 'custom'){
+    const wIn = parseFloat(document.getElementById('prCustomW').value) || 11;
+    const hIn = parseFloat(document.getElementById('prCustomH').value) || 17;
+    return { label: 'Custom (' + wIn + '×' + hIn + ' in)', wIn, hIn };
+  }
+  return SHEET_SIZES[key] || SHEET_SIZES.tabloid;
 }
+document.getElementById('prSheetSize').addEventListener('change', () => {
+  document.getElementById('prCustomSizeRow').style.display = document.getElementById('prSheetSize').value === 'custom' ? 'flex' : 'none';
+});
 
 // Injects @page rules sized to the chosen sheet - portrait for most sheets, landscape (.pr-landscape)
 // for Plan & Profile - overriding the static Letter default declared earlier in the stylesheet (a
@@ -2657,13 +2673,23 @@ async function generatePdfReport(){
     let xmin = Math.min(...uxs), xmax = Math.max(...uxs), ymin = Math.min(...uys), ymax = Math.max(...uys);
     const padX = Math.max((xmax-xmin)*0.15, 25), padY = Math.max((ymax-ymin)*0.15, 25);
     xmin -= padX; xmax += padX; ymin -= padY; ymax += padY;
+    // Portrait vs landscape is picked from the line's OWN real shape, not assumed - an east-west
+    // drain has a wide bbox that wants landscape, a north-south one wants portrait, and forcing one
+    // orientation regardless wastes real page space either way. Compares each orientation's actual
+    // resulting main-content aspect ratio (post panel/margin) against the bbox's own aspect, in log
+    // space so being-too-wide and being-too-narrow are penalized symmetrically, and keeps whichever
+    // is the closer fit.
+    const bboxW0 = xmax-xmin, bboxH0 = ymax-ymin, bboxAspect = bboxW0/bboxH0;
+    const portraitAspect = mainContentWidthPx(false) / mainContentHeightPx(false, 55);
+    const landscapeAspect = mainContentWidthPx(true) / mainContentHeightPx(true, 55);
+    const locationPlanLandscape = Math.abs(Math.log(landscapeAspect/bboxAspect)) < Math.abs(Math.log(portraitAspect/bboxAspect));
     // imgW/imgH track the chosen sheet size's real main-content width/height (see
     // mainContentWidthPx/mainContentHeightPx) so a bigger sheet genuinely shows this same imagery at
     // a bigger, clearer scale rather than just stretching the old fixed 860x420 version thinner, and
     // the map fills the column's real available height instead of stopping at a fixed aspect ratio
     // and leaving a large blank gap below it (the bbox-fit logic below already re-shapes the
     // geographic extent to match whatever aspect imgW/imgH end up implying).
-    const imgW = mainContentWidthPx(false), imgH = Math.round(mainContentHeightPx(false, 55) * 0.9);
+    const imgW = mainContentWidthPx(locationPlanLandscape), imgH = Math.round(mainContentHeightPx(locationPlanLandscape, 55) * 0.9);
     const targetAspect = imgW/imgH, bboxW = xmax-xmin, bboxH = ymax-ymin;
     if(bboxW/bboxH > targetAspect){
       const newH = bboxW/targetAspect, cy=(ymin+ymax)/2; ymin=cy-newH/2; ymax=cy+newH/2;
@@ -2731,7 +2757,7 @@ async function generatePdfReport(){
     const barPx = barMeters / finalBboxW * imgW;
     const northArrowHtml = '<div class="pr-north-arrow"><svg width="14" height="16" viewBox="0 0 14 16" fill="none"><path d="M7 0L13 12H1L7 0Z" fill="#1a1a2e"/></svg>N</div>';
     const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
-    const locationPlanScale = computeScaleInfo(finalBboxW, imgW, false);
+    const locationPlanScale = computeScaleInfo(finalBboxW, imgW, locationPlanLandscape);
 
     // Key plan for the info panel - the exact same aerial asset as the Location Plan sheet above,
     // just shown small with a plain line/dots (no station ticks - illegible at this size, just
@@ -2838,7 +2864,7 @@ async function generatePdfReport(){
         xsCards.push('<div class="pr-xs-card"><div class="pr-xs-title">'+title+'</div>'+svg+'</div>');
       });
     }
-    const CARDS_PER_SHEET = 6; // 2 cols x 3 rows fits one Letter sheet at this card aspect ratio
+    const CARDS_PER_SHEET = 6; // 3 cols x 2 rows - landscape (see below) fits this comfortably
     const xsSheetGroups = [];
     for(let i=0; i<xsCards.length; i+=CARDS_PER_SHEET) xsSheetGroups.push(xsCards.slice(i, i+CARDS_PER_SHEET));
     const totalSheets = 3 + xsSheetGroups.length;
@@ -2863,7 +2889,7 @@ async function generatePdfReport(){
     // (cross-sections) only exist when there's a design grade to have stations from, and there can
     // be more than one of them once an interval produces more cards than fit on a single sheet.
     const sheet1 =
-      '<div class="pr-page">' +
+      '<div class="pr-page' + (locationPlanLandscape ? ' pr-landscape' : '') + '">' +
         '<div class="pr-main">' +
           '<div class="pr-sheet-title">Location Plan<span class="pr-sheet-sub">Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</span></div>' +
           '<div class="pr-sheet-content">' +
@@ -2901,7 +2927,7 @@ async function generatePdfReport(){
     const xsSheets = xsSheetGroups.map((cards, idx) => {
       const sheetNum = 4 + idx;
       const subLabel = xsSheetGroups.length > 1 ? (xsIntervalLabel + ' · Sheet ' + (idx+1) + ' of ' + xsSheetGroups.length) : xsIntervalLabel;
-      return '<div class="pr-page">' +
+      return '<div class="pr-page pr-landscape">' +
         '<div class="pr-main">' +
           '<div class="pr-sheet-title">Cross Sections<span class="pr-sheet-sub">' + subLabel + '</span></div>' +
           '<div class="pr-sheet-content"><div class="pr-xs-row">' + cards.join('') + '</div></div>' +
