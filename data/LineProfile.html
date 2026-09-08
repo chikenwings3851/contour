@@ -2400,10 +2400,10 @@ function mainContentHeightPx(landscape, reserveMM){
 // chart panel happens to be at - always the full 0..totalLen extent, at the exact w/pad the Plan &
 // Profile sheet's straightened plan strip above it uses, so a vertical line through both lands on
 // the same station by construction rather than by coincidence.
-function buildStaticProfileSVG(prof, w, pad, h){
+function buildStaticProfileSVG(prof, w, pad, h, yRangeOverride){
   const totalLen = prof[prof.length-1].dist;
   const PT = 10, PB = 24;
-  const { yMinM, yMaxM } = computeChartYRange(prof, 0, totalLen);
+  const { yMinM, yMaxM } = yRangeOverride || computeChartYRange(prof, 0, totalLen);
   const X = d => pad.l + d/totalLen*(w-pad.l-pad.r);
   const Y = e => PT + (1-(e-yMinM)/(yMaxM-yMinM))*(h-PT-PB);
 
@@ -2564,10 +2564,20 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
 // A real "1:N" scale for a drawing spanning realMeters across contentWidthPx of the sheet's own
 // content (at PR_PX_PER_MM) - since a bigger chosen sheet really does put the same content at a
 // bigger/clearer scale (smaller N), this label is an honest, real number, not a static guess.
+// A real civil drawing is always plotted at a round, recognized scale (1:500, 1:1000, 1:2000...),
+// never an arbitrary fit-derived ratio like "1:1508" - the single biggest tell that a drawing wasn't
+// done to convention. This is the standard metric engineering-scale progression (1/2/2.5/5 x 10^n)
+// plus a few common Canadian municipal-drawing in-between values (150/300/600/750).
+const STANDARD_SCALES = [50,75,100,125,150,200,250,300,400,500,600,750,1000,1250,1500,2000,2500,3000,4000,5000,6000,7500,10000,15000,20000,25000,30000,40000,50000];
+function snapScaleUp(rawRatio){
+  for(const s of STANDARD_SCALES){ if(s >= rawRatio - 1e-6) return s; }
+  return Math.ceil(rawRatio/5000)*5000;
+}
 function computeScaleInfo(realMeters, contentWidthPx){
   const contentWidthMM = contentWidthPx / PR_PX_PER_MM;
-  const metresPerMM = realMeters / contentWidthMM;
-  return { ratio: Math.round(metresPerMM * 1000) };
+  const rawMetresPerMM = realMeters / contentWidthMM;
+  const ratio = snapScaleUp(rawMetresPerMM * 1000);
+  return { ratio, metresPerMM: ratio / 1000 };
 }
 
 function buildScaleText(kind, opts){
@@ -2669,6 +2679,19 @@ async function generatePdfReport(){
     } else {
       const newW = bboxH*targetAspect, cx=(xmin+xmax)/2; xmin=cx-newW/2; xmax=cx+newW/2;
     }
+    // Snap the map to a standard drawing scale (1:500, 1:1000, 1:2000...) rather than an arbitrary
+    // fit-derived ratio - grows the shown geographic extent around the same center (never shrinks it,
+    // so nothing that would have been visible gets cropped out) until the resulting scale is round.
+    {
+      const rawMetresPerMM = (xmax-xmin) * PR_PX_PER_MM / imgW;
+      const snappedRatio = snapScaleUp(rawMetresPerMM * 1000);
+      const growFactor = (snappedRatio/1000) / rawMetresPerMM;
+      if(growFactor > 1.0005){
+        const cx=(xmin+xmax)/2, cy=(ymin+ymax)/2;
+        const halfW=(xmax-xmin)/2*growFactor, halfH=(ymax-ymin)/2*growFactor;
+        xmin=cx-halfW; xmax=cx+halfW; ymin=cy-halfH; ymax=cy+halfH;
+      }
+    }
     // The requested raster stays capped regardless of imgW/imgH (which can get large on a big chosen
     // sheet) - the export endpoint got noticeably slow to render, and on ANSI D/Arch D sized requests
     // outright failed to return within the existing load timeout. The <img> still displays at the
@@ -2746,7 +2769,21 @@ async function generatePdfReport(){
     // ppPlanH/ppProfileH are expressed as FRACTIONS of ppW (tuned against a Letter-landscape ppW of
     // 1160) rather than fixed pixel constants, so a much bigger chosen sheet doesn't end up with a
     // huge wide plan strip over a comparatively tiny, unscaled profile chart underneath it.
-    const ppW = mainContentWidthPx(true), ppPad = { l: 58, r: 16 };
+    const ppW = mainContentWidthPx(true);
+    let ppPad = { l: 58, r: 16 };
+    // Snap the horizontal scale to standard too. totalLen (the real drawn line length) can't be grown
+    // the way a map bbox can, so this shrinks the drawn content width to whatever the snapped scale
+    // implies instead - always <= the raw fit-to-width value, so this only ever frees up space, never
+    // overflows - and centers it within the full available width by growing ppPad.l/r equally rather
+    // than leaving all the freed space stranded on one side.
+    {
+      const rawContentW = ppW - ppPad.l - ppPad.r;
+      const rawMetresPerMM = totalLen * PR_PX_PER_MM / rawContentW;
+      const snappedRatio = snapScaleUp(rawMetresPerMM * 1000);
+      const finalContentW = totalLen * PR_PX_PER_MM / (snappedRatio/1000);
+      const extraW = Math.max(0, rawContentW - finalContentW);
+      ppPad = { l: ppPad.l + extraW/2, r: ppPad.r + extraW/2 };
+    }
     const ppScale = (ppW - ppPad.l - ppPad.r) / totalLen;
     const ppBufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
     const ppPlanHMin = Math.round(ppW * 0.172), ppPlanHMax = Math.round(ppW * 0.345);
@@ -2757,8 +2794,9 @@ async function generatePdfReport(){
     // page actually has left over (confirmed: it did, a real overflow onto a 2nd physical page).
     // mainContentHeightPx already reserves the title block; cap the combined plan+profile height to
     // whatever it says is actually left, keeping ppPlanH (driven by the real corridor width) intact
-    // and shrinking only the profile chart if the two don't both fit.
-    const ppAvailH = mainContentHeightPx(true, 30);
+    // and shrinking only the profile chart if the two don't both fit. Reserve bumped 30->40mm to also
+    // cover the compact datum/attribution footer line added below every sheet.
+    const ppAvailH = mainContentHeightPx(true, 40);
     const ppProfileH = Math.max(150, Math.min(Math.round(ppW * 0.371), ppAvailH - ppPlanH));
     let planImgDataUrl = null, planProfileError = null;
     try{
@@ -2766,11 +2804,25 @@ async function generatePdfReport(){
     } catch(err){
       planProfileError = err.message;
     }
-    const profileSvg = buildStaticProfileSVG(profile, ppW, ppPad, ppProfileH);
-    const { yMinM: ppYMin, yMaxM: ppYMax } = computeChartYRange(profile, 0, totalLen);
+    // Vertical scale snaps the same way, but since the profile chart's pixel height is fixed by page
+    // layout (unlike the horizontal content width, which can shrink and center), the plotted
+    // elevation range is expanded instead - symmetric padding added around the real min/max so the
+    // same fixed height maps to a round "1:N" at the snapped scale, with the ground/grade line
+    // occupying a bit less than the full frame rather than an arbitrary fit-derived ratio.
+    const ppProfileContentH = ppProfileH - 34;
+    let { yMinM: ppYMin, yMaxM: ppYMax } = computeChartYRange(profile, 0, totalLen);
+    {
+      const rawSpan = ppYMax - ppYMin;
+      const rawMetresPerMM = rawSpan * PR_PX_PER_MM / ppProfileContentH;
+      const snappedRatio = snapScaleUp(rawMetresPerMM * 1000);
+      const finalSpan = ppProfileContentH * (snappedRatio/1000) / PR_PX_PER_MM;
+      const extraSpan = Math.max(0, finalSpan - rawSpan);
+      ppYMin -= extraSpan/2; ppYMax += extraSpan/2;
+    }
+    const profileSvg = buildStaticProfileSVG(profile, ppW, ppPad, ppProfileH, { yMinM: ppYMin, yMaxM: ppYMax });
     const planProfileScale = {
       h: computeScaleInfo(totalLen, ppW - ppPad.l - ppPad.r),
-      v: computeScaleInfo(ppYMax - ppYMin, ppProfileH - 34)
+      v: computeScaleInfo(ppYMax - ppYMin, ppProfileContentH)
     };
     const ppXStep = niceGridSpacing(totalLen, 8);
     // The centerline sits exactly at y=ppPlanH/2 by construction (station is the x-axis, lateral
