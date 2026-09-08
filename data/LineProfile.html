@@ -489,7 +489,11 @@
   .pr-map-wrap{ position:relative; border:1px solid #d8dae8; page-break-inside:avoid; }
   .pr-map-wrap img{ display:block; width:100%; height:auto; }
   .pr-map-wrap svg{ position:absolute; inset:0; width:100%; height:100%; }
-  #printReport .stats-grid{ page-break-inside:avoid; }
+  /* 3 columns instead of the sidebar's 2 - Profile Summary prints landscape now (see below), which
+     is shorter than portrait was, and the extra width converts into fewer rows (.stat.wide's own
+     grid-column:1/-1 still spans however many columns exist, so it isn't affected). Confirmed via a
+     real page-count overflow this fixed: 2 columns' extra row didn't fit the shorter landscape sheet. */
+  #printReport .stats-grid{ page-break-inside:avoid; grid-template-columns:repeat(3, 1fr); }
   .pr-chart-wrap{ border:1px solid #d8dae8; padding:9px; page-break-inside:avoid; }
   .pr-chart-wrap svg{ display:block; width:100%; height:auto; }
   .pr-pp-wrap{ position:relative; page-break-inside:avoid; }
@@ -2630,16 +2634,13 @@ async function generatePdfReport(){
     let xmin = Math.min(...uxs), xmax = Math.max(...uxs), ymin = Math.min(...uys), ymax = Math.max(...uys);
     const padX = Math.max((xmax-xmin)*0.15, 25), padY = Math.max((ymax-ymin)*0.15, 25);
     xmin -= padX; xmax += padX; ymin -= padY; ymax += padY;
-    // Portrait vs landscape is picked from the line's OWN real shape, not assumed - an east-west
-    // drain has a wide bbox that wants landscape, a north-south one wants portrait, and forcing one
-    // orientation regardless wastes real page space either way. Compares each orientation's actual
-    // resulting main-content aspect ratio (post panel/margin) against the bbox's own aspect, in log
-    // space so being-too-wide and being-too-narrow are penalized symmetrically, and keeps whichever
-    // is the closer fit.
-    const bboxW0 = xmax-xmin, bboxH0 = ymax-ymin, bboxAspect = bboxW0/bboxH0;
-    const portraitAspect = mainContentWidthPx(false) / mainContentHeightPx(false, 55);
-    const landscapeAspect = mainContentWidthPx(true) / mainContentHeightPx(true, 55);
-    const locationPlanLandscape = Math.abs(Math.log(landscapeAspect/bboxAspect)) < Math.abs(Math.log(portraitAspect/bboxAspect));
+    // Every sheet in the set prints landscape - a real drawing set keeps one consistent physical
+    // sheet size/orientation throughout (this used to pick portrait vs landscape per the line's own
+    // bbox shape, which looked like a bug: the Location Plan sheet coming out a visibly different
+    // size from Plan & Profile in the same set). Landscape specifically because Plan & Profile's
+    // content genuinely needs it (a wide station strip) and Cross Sections benefits from it too;
+    // Location Plan and Profile Summary both work fine either way, so they follow suit for consistency.
+    const locationPlanLandscape = true;
     // imgW/imgH track the chosen sheet size's real main-content width/height (see
     // mainContentWidthPx/mainContentHeightPx) so a bigger sheet genuinely shows this same imagery at
     // a bigger, clearer scale rather than just stretching the old fixed 860x420 version thinner, and
@@ -2737,7 +2738,7 @@ async function generatePdfReport(){
     // mainContentHeightPx already reserves the title block; cap the combined plan+profile height to
     // whatever it says is actually left, keeping ppPlanH (driven by the real corridor width) intact
     // and shrinking only the profile chart if the two don't both fit.
-    const ppAvailH = mainContentHeightPx(true, 12);
+    const ppAvailH = mainContentHeightPx(true, 30);
     const ppProfileH = Math.max(150, Math.min(Math.round(ppW * 0.371), ppAvailH - ppPlanH));
     let planImgDataUrl = null, planProfileError = null;
     try{
@@ -2866,7 +2867,7 @@ async function generatePdfReport(){
         buildTitleBlock2('Plan & Profile', 2, totalSheets, buildScaleText('hv', planProfileScale)) +
       '</div>';
     const sheet3 =
-      '<div class="pr-page">' +
+      '<div class="pr-page pr-landscape">' +
         '<div class="pr-sheet-title">Profile Summary' + (designGrade ? '<span class="pr-sheet-sub">With Design Grade &amp; Cut/Fill</span>' : '') + '</div>' +
         '<div class="pr-sheet-content">' +
           statsClone.outerHTML +
