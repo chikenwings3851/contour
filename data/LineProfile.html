@@ -464,24 +464,23 @@
     @page{ size:letter; margin:12mm; }
     @page pr-landscape-page{ size:letter landscape; margin:12mm; }
   }
-  /* Each .pr-page is one physical sheet: a bordered drawing frame laid out as a row - the drawing
-     itself on the left (.pr-main), a full-height info panel on the right (.pr-infopanel), the way a
-     real consulting-engineering drawing set is laid out (key plan/approvals/scale/revisions down the
-     side, not a thin strip along the bottom). --pr-page-h/--pr-page-h-ls are set by
-     applySheetSizeCss() to the real content-box height of whichever sheet size is chosen - min-height
-     falls back to Letter's own numbers before that first runs. page-break-after moves each sheet onto
-     its own printed page. The Plan & Profile sheet opts into the named landscape page (.pr-landscape)
-     since it's wide, not tall, content - a CSS Paged Media named page, not a global setting, so every
-     other sheet stays portrait. */
+  /* Each .pr-page is one physical sheet: a bordered drawing frame, content on top, a real bottom
+     title block (.pr-tb2) pinned to the bottom via margin-top:auto - the classic engineering-drawing
+     layout (north arrow/amendments table above a SITE/SCALE/DATE/DRAWN BY/TITLE/PROJECT NO./DRAWING
+     NO./SHEET NO. grid plus a firm-identity block on the right), not a full-height side panel.
+     --pr-page-h/--pr-page-h-ls are set by applySheetSizeCss() to the real content-box height of
+     whichever sheet size is chosen - min-height falls back to Letter's own numbers before that first
+     runs. page-break-after moves each sheet onto its own printed page. The Plan & Profile sheet opts
+     into the named landscape page (.pr-landscape) since it's wide, not tall, content - a CSS Paged
+     Media named page, not a global setting, so every other sheet stays portrait. */
   .pr-page{
     font-family:var(--font-ui); color:#161824; box-sizing:border-box;
-    border:1.25pt solid #1a1a2e;
-    min-height:var(--pr-page-h, 253mm); display:flex; flex-direction:row;
+    border:1.25pt solid #1a1a2e; padding:7mm 7mm 6mm;
+    min-height:var(--pr-page-h, 253mm); display:flex; flex-direction:column;
     page-break-after:always;
   }
   .pr-page.pr-landscape{ page:pr-landscape-page; min-height:var(--pr-page-h-ls, 192mm); }
   .pr-page:last-child{ page-break-after:auto; }
-  .pr-main{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; padding:7mm 6mm 5mm 7mm; }
   .pr-sheet-title{ font-size:14.5px; font-weight:800; text-transform:uppercase; letter-spacing:0.4px; margin:0 0 4mm; padding-bottom:3mm; border-bottom:1.5pt solid #1a1a2e; display:flex; align-items:baseline; justify-content:space-between; }
   .pr-sheet-title .pr-sheet-sub{ font-size:10px; font-weight:600; text-transform:none; color:#6b7080; letter-spacing:0; }
   .pr-sheet-content{ flex:1 1 auto; }
@@ -514,45 +513,43 @@
   .pr-scale-bar .pr-scale-line::before, .pr-scale-bar .pr-scale-line::after{ content:''; position:absolute; top:-3px; width:2px; height:9px; background:#1a1a2e; }
   .pr-scale-bar .pr-scale-line::before{ left:0; }
   .pr-scale-bar .pr-scale-line::after{ right:0; }
-  /* Info panel - full-height right-side strip: firm identity, key plan, client/project/drawing
-     identity, data source, approvals, P.Eng seal, scale, revisions, and a drawing/sheet/rev grid
-     pinned to the bottom - the layout of a real consulting-engineering title sheet (this convention
-     - a full-height strip rather than only a bottom-right block - is well established specifically
-     for civil/site drawing sets, confirmed against real title-block references). Width is a genuine
-     physical size per sheet (--pr-panel-w, set by applySheetSizeCss from PR_PANEL_WIDTH_IN) rather
-     than a flat fraction of the page - real title blocks don't grow linearly with sheet size either. */
-  .pr-infopanel{
-    flex:0 0 var(--pr-panel-w, 82.5mm); border-left:1.25pt solid #1a1a2e; padding:3.5mm 3mm; box-sizing:border-box;
-    display:flex; flex-direction:column; font-size:7.5px; color:#161824; overflow:hidden;
+  /* Bottom title block (.pr-tb2) - the classic engineering-drawing layout: a north arrow and a small
+     amendments/revisions table sit above a labelled grid (Site/Scale/Date/Drawn By over Title/
+     Project No./Drawing No./Sheet No.), with a firm-identity block spanning both rows on the right -
+     matched directly against a real reference title block rather than the earlier full-height side
+     panel, which turned out not to be what this app should look like. margin-top:auto pins it to the
+     bottom of .pr-page regardless of how much (or little) content sits above it. */
+  .pr-tb2{ margin-top:auto; padding-top:5mm; }
+  .pr-tb2-top{ display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:2mm; }
+  .pr-tb2-compass{ width:13mm; flex:none; }
+  .pr-tb2-compass svg{ display:block; width:100%; height:auto; }
+  .pr-tb2-rev{ width:46%; }
+  .pr-tb2-rev table{ width:100%; border-collapse:collapse; border:0.75pt solid #1a1a2e; font-size:6.2px; }
+  .pr-tb2-rev th, .pr-tb2-rev td{ border:0.4pt solid #1a1a2e; padding:1px 3px; text-align:left; height:3mm; }
+  .pr-tb2-amend-hdr{ text-align:center!important; font-weight:700; letter-spacing:0.6px; font-size:5.6px; text-transform:uppercase; color:#6b7080; }
+  .pr-tb2-grid{
+    display:grid; border:1.25pt solid #1a1a2e;
+    grid-template-columns:2.6fr 1fr 1fr 1.2fr 2.3fr;
+    grid-template-areas:"site scale date drawnby firm" "title projno drawno sheetno firm";
   }
-  .pr-ip-firm{ text-align:center; padding-bottom:2.6mm; border-bottom:0.75pt solid #1a1a2e; margin-bottom:2.6mm; }
-  .pr-ip-firm .pr-ip-mark{ width:18px; height:18px; border-radius:5px; background:linear-gradient(135deg,#6a6af5,#4747d6); display:inline-flex; align-items:center; justify-content:center; margin-bottom:3px; }
-  .pr-ip-firm .pr-ip-name{ font-size:11px; font-weight:800; line-height:1.2; }
-  .pr-ip-firm .pr-ip-tag{ font-size:5.6px; font-weight:700; letter-spacing:0.6px; color:#6b7080; text-transform:uppercase; margin-top:1.5px; }
-  .pr-ip-firm .pr-ip-contact{ font-size:6.2px; color:#3a3f4e; margin-top:3px; line-height:1.5; }
-  .pr-ip-section{ margin-bottom:2.6mm; }
-  .pr-ip-label{ font-size:5.6px; font-weight:700; color:#6b7080; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:0.8mm; }
-  .pr-ip-value{ font-size:8px; font-weight:700; color:#161824; line-height:1.3; word-break:break-word; }
-  .pr-ip-keyplan{ border:0.5pt solid #1a1a2e; position:relative; aspect-ratio:1.35; overflow:hidden; margin-bottom:1.2mm; background:#eef0f6; }
-  .pr-ip-keyplan img{ display:block; width:100%; height:100%; object-fit:cover; }
-  .pr-ip-keyplan svg{ position:absolute; inset:0; width:100%; height:100%; }
-  .pr-ip-keyplan-n{ position:absolute; top:2px; right:3px; font-size:5.2px; font-weight:800; background:rgba(255,255,255,0.85); border-radius:2px; padding:0.5px 2px; }
-  .pr-ip-datasource div{ font-size:6px; color:#3a3f4e; line-height:1.6; }
-  .pr-ip-table{ width:100%; border-collapse:collapse; font-size:5.8px; }
-  .pr-ip-table th, .pr-ip-table td{ border:0.35pt solid #c7ccdb; padding:1.2px 2.4px; text-align:left; }
-  .pr-ip-table th{ font-weight:700; color:#6b7080; text-transform:uppercase; font-size:5.2px; }
-  .pr-ip-seal{ text-align:center; padding:2mm 0 2.5mm; }
-  .pr-ip-seal-circle{ width:19mm; height:19mm; border-radius:50%; border:0.5pt dashed #9ca3af; margin:0 auto 1.2mm; display:flex; align-items:center; justify-content:center; font-size:5.6px; font-weight:600; color:#9ca3af; letter-spacing:1px; }
-  .pr-ip-seal-note{ font-size:4.6px; color:#9ca3af; letter-spacing:0.2px; }
-  .pr-ip-scale-row{ display:flex; justify-content:space-between; align-items:baseline; }
-  .pr-ip-scale-row .pr-ip-scale-label{ font-size:6px; color:#6b7080; }
-  .pr-ip-scale-row .pr-ip-scale-value{ font-size:8.2px; font-weight:700; }
-  .pr-ip-scale-bar-h{ height:2.8px; margin:1.2mm 0 1px; background-image:linear-gradient(to right, #1a1a2e 50%, #fff 50%); background-size:25% 100%; border:0.35pt solid #1a1a2e; }
-  .pr-ip-scale-ticks{ display:flex; justify-content:space-between; font-size:4.8px; color:#6b7080; }
-  .pr-ip-idgrid{ margin-top:auto; border-top:0.75pt solid #1a1a2e; padding-top:2mm; display:grid; grid-template-columns:1fr 1fr; gap:1.5mm 2mm; }
-  .pr-ip-idgrid .pr-ip-idcell .pr-ip-label{ margin-bottom:0.4mm; }
-  .pr-ip-idgrid .pr-ip-idcell.pr-ip-drawingno .pr-ip-value{ font-size:12px; font-weight:800; }
-  .pr-ip-idgrid .pr-ip-idcell.pr-ip-full{ grid-column:1 / -1; }
+  .pr-tb2-cell{ border-top:0.75pt solid #1a1a2e; border-right:0.75pt solid #1a1a2e; padding:1.8mm 2.8mm; min-width:0; overflow:hidden; }
+  .pr-tb2-grid > .pr-tb2-cell:nth-child(1), .pr-tb2-grid > .pr-tb2-cell:nth-child(2), .pr-tb2-grid > .pr-tb2-cell:nth-child(3){ border-top:none; }
+  .pr-tb2-c-site{ grid-area:site; }
+  .pr-tb2-c-scale{ grid-area:scale; }
+  .pr-tb2-c-date{ grid-area:date; }
+  .pr-tb2-c-drawnby{ grid-area:drawnby; border-right:none; }
+  .pr-tb2-c-title{ grid-area:title; }
+  .pr-tb2-c-projno{ grid-area:projno; }
+  .pr-tb2-c-drawno{ grid-area:drawno; }
+  .pr-tb2-c-sheetno{ grid-area:sheetno; border-right:none; }
+  .pr-tb2-c-firm{ grid-area:firm; border-right:none; border-top:none; display:flex; align-items:center; gap:2.5mm; padding:2mm 3mm; }
+  .pr-tb2-label{ font-size:6px; font-weight:700; color:#6b7080; text-transform:uppercase; letter-spacing:0.3px; display:block; }
+  .pr-tb2-value{ font-size:8.5px; font-weight:600; color:#161824; margin-top:0.8mm; line-height:1.25; word-break:break-word; }
+  .pr-tb2-c-title .pr-tb2-value{ font-size:10px; font-weight:700; }
+  .pr-tb2-c-sheetno .pr-tb2-value{ font-weight:800; }
+  .pr-tb2-logo{ width:11mm; height:11mm; border-radius:50%; flex:none; background:linear-gradient(135deg,#6a6af5,#4747d6); display:flex; align-items:center; justify-content:center; }
+  .pr-tb2-firmname{ font-size:11.5px; font-weight:800; line-height:1.2; }
+  .pr-tb2-firmcontact{ font-size:6.8px; color:#3a3f4e; line-height:1.5; margin-top:1mm; }
   .toolbar-group{display:flex;align-items:center;gap:8px;}
   .toolbar-divider{width:1px;align-self:stretch;background:var(--border-strong);margin:2px 0;}
   .layer-toggle-group{border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden;gap:0;}
@@ -2323,27 +2320,21 @@ const PR_MARGIN_IN = 0.5;
 // (imgW=860 at a ~178mm content width) - kept as a constant so a bigger chosen sheet renders its
 // content at a genuinely bigger/clearer scale rather than just the same content stretched thinner.
 const PR_PX_PER_MM = 4.84;
-// A real title block/info panel is a roughly fixed physical width, not a flat fraction of the page -
-// some drafting standards fix it outright (ISO's is ~100mm regardless of sheet size), others grow it
-// modestly for bigger sheets, but never linearly with page width (a flat fraction made it comically
-// narrow/cramped on Tabloid and oversized on Arch D). Tuned in inches for the two sizes this app
-// offers, per real title-block proportion references, not guessed.
-const PR_PANEL_WIDTH_IN = { tabloid: 3.25, archD: 4.5 };
+// Real measured height of the bottom title block (.pr-tb2: padding-top + north-arrow/amendments row
+// + the two-row Site/Scale/.../Sheet No. grid) - subtracted from every sheet's available height so
+// content never overlaps or gets squeezed by it.
+const PR_TITLEBLOCK_H_MM = 42;
 
 function currentSheetSize(){
   const key = document.getElementById('prSheetSize').value;
   return SHEET_SIZES[key] || SHEET_SIZES.tabloid;
 }
-function panelWidthIn(){
-  const key = document.getElementById('prSheetSize').value;
-  return PR_PANEL_WIDTH_IN[key] || PR_PANEL_WIDTH_IN.tabloid;
-}
 
 // Injects @page rules sized to the chosen sheet - portrait for most sheets, landscape (.pr-landscape)
 // for sheets that want it - overriding the static Letter default declared earlier in the stylesheet
-// (a later same-name @page rule wins in CSS Paged Media). Also sets --pr-page-h/--pr-page-h-ls/
-// --pr-panel-w custom properties so .pr-page's min-height and .pr-infopanel's width match the real
-// chosen page instead of staying hardcoded to Letter's.
+// (a later same-name @page rule wins in CSS Paged Media). Also sets --pr-page-h/--pr-page-h-ls custom
+// properties so .pr-page's min-height matches the real chosen page instead of staying hardcoded to
+// Letter's.
 function applySheetSizeCss(){
   const size = currentSheetSize();
   const marginMM = PR_MARGIN_IN * 25.4;
@@ -2351,7 +2342,6 @@ function applySheetSizeCss(){
   const landscapeHmm = size.wIn*25.4 - 2*marginMM;
   document.documentElement.style.setProperty('--pr-page-h', portraitHmm.toFixed(1) + 'mm');
   document.documentElement.style.setProperty('--pr-page-h-ls', landscapeHmm.toFixed(1) + 'mm');
-  document.documentElement.style.setProperty('--pr-panel-w', (panelWidthIn()*25.4).toFixed(1) + 'mm');
   const css = '@media print{' +
     '@page{ size:' + size.wIn + 'in ' + size.hIn + 'in; margin:' + PR_MARGIN_IN + 'in; }' +
     '@page pr-landscape-page{ size:' + size.hIn + 'in ' + size.wIn + 'in; margin:' + PR_MARGIN_IN + 'in; }' +
@@ -2361,30 +2351,29 @@ function applySheetSizeCss(){
 }
 
 // The real usable "main content" width, in abstract px units at PR_PX_PER_MM, for a sheet of the
-// chosen size - i.e. everything inside the @page margin, the .pr-page border, the info panel (a
-// fixed real width, not a fraction of the main area), and the main column's own internal padding.
-// Used in place of what used to be a flat imgW=860/ppW=1160 constant everywhere the report builds a
+// chosen size - i.e. everything inside the @page margin and the .pr-page's own padding. Used in
+// place of what used to be a flat imgW=860/ppW=1160 constant everywhere the report builds a
 // map/chart/card at "full width".
 function mainContentWidthPx(landscape){
   const size = currentSheetSize();
   const marginMM = PR_MARGIN_IN * 25.4;
   const pageWmm = (landscape ? size.hIn : size.wIn) * 25.4;
   const usableMM = pageWmm - 2*marginMM;
-  const panelMM = panelWidthIn() * 25.4;
-  const paddingMM = 7 + 6 + 4; // .pr-main's own l/r padding + the panel's own l/r padding/border
-  const mainMM = Math.max(60, usableMM - panelMM - paddingMM);
+  const paddingMM = 7 + 7; // .pr-page's own l/r padding
+  const mainMM = Math.max(60, usableMM - paddingMM);
   return Math.round(mainMM * PR_PX_PER_MM);
 }
 
 // The real vertical space .pr-sheet-content has to work with, for a single-graphic sheet (like the
 // Location Plan's map) that should fill its column's height rather than sit at a fixed aspect ratio
-// and leave a large blank gap below it, as it did before this accounted for real available height.
+// and leave a large blank gap below it. Always reserves room for the real bottom title block
+// (PR_TITLEBLOCK_H_MM) in addition to whatever title-row/footer/padding space the caller reserves.
 function mainContentHeightPx(landscape, reserveMM){
   const size = currentSheetSize();
   const marginMM = PR_MARGIN_IN * 25.4;
   const pageHmm = (landscape ? size.wIn : size.hIn) * 25.4;
   const usableMM = pageHmm - 2*marginMM;
-  const availMM = Math.max(40, usableMM - (reserveMM || 30));
+  const availMM = Math.max(40, usableMM - PR_TITLEBLOCK_H_MM - (reserveMM || 30));
   return Math.round(availMM * PR_PX_PER_MM);
 }
 
@@ -2553,50 +2542,29 @@ async function buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalL
 // prDrawnBy sidebar fields live at print time rather than baking them in once, so a value typed
 // after the report was last built is never stale.
 // Real physical width (mm) of the info panel's own content area (inside its border/padding) for the
-// chosen sheet size - used to size the scale bar graphic to what will actually fit there, and to
-// convert a real-world span (metres) into a genuine "1:N" ratio for whatever content sits in .pr-main.
-function panelContentWidthMM(){
-  return Math.max(20, panelWidthIn()*25.4 - 5.2);
-}
-
-// A real "1:N" scale for a drawing spanning realMeters across contentWidthPx of .pr-main content
-// (at PR_PX_PER_MM), plus a scale-bar graphic sized to genuinely match it, not just a fixed-looking
-// decoration - since a bigger chosen sheet really does put the same content at a bigger/clearer
-// scale (smaller N), this label is an honest, real number, not a static guess.
+// A real "1:N" scale for a drawing spanning realMeters across contentWidthPx of the sheet's own
+// content (at PR_PX_PER_MM) - since a bigger chosen sheet really does put the same content at a
+// bigger/clearer scale (smaller N), this label is an honest, real number, not a static guess.
 function computeScaleInfo(realMeters, contentWidthPx){
   const contentWidthMM = contentWidthPx / PR_PX_PER_MM;
   const metresPerMM = realMeters / contentWidthMM;
-  const ratio = Math.round(metresPerMM * 1000);
-  const panelMM = panelContentWidthMM();
-  const niceBarMeters = niceGridSpacing(panelMM * metresPerMM * 0.85, 1);
-  const barPercent = Math.min(100, (niceBarMeters / metresPerMM) / panelMM * 100);
-  return { ratio, metresPerMM, barMeters: niceBarMeters, barPercent };
+  return { ratio: Math.round(metresPerMM * 1000) };
 }
 
-function buildScaleHtml(kind, opts){
-  if(kind === 'note'){
-    return '<div class="pr-ip-label">Scale</div><div class="pr-ip-value">' + escHtml(opts.text) + '</div>';
-  }
-  const h = opts.h;
-  let html = '<div class="pr-ip-label">Scale</div>' +
-    '<div class="pr-ip-scale-row"><span class="pr-ip-scale-label">HORIZ.</span><span class="pr-ip-scale-value">1:' + h.ratio + '</span></div>' +
-    '<div class="pr-ip-scale-bar-h" style="width:' + h.barPercent.toFixed(0) + '%;"></div>' +
-    '<div class="pr-ip-scale-ticks" style="width:' + h.barPercent.toFixed(0) + '%;"><span>0</span><span>' + fmtDist(h.barMeters) + '</span></div>';
-  if(kind === 'hv'){
-    const v = opts.v, ve = Math.round(h.ratio / v.ratio);
-    html += '<div class="pr-ip-scale-row" style="margin-top:1.8mm;"><span class="pr-ip-scale-label">VERT.</span><span class="pr-ip-scale-value">1:' + v.ratio + '</span></div>' +
-      '<div class="pr-ip-scale-ticks"><span>V.E. ' + ve + 'x</span></div>';
-  }
-  return html;
+function buildScaleText(kind, opts){
+  if(kind === 'note') return opts.text;
+  if(kind === 'hv') return 'H 1:' + opts.h.ratio + '  V 1:' + opts.v.ratio + '  (V.E. ' + Math.round(opts.h.ratio/opts.v.ratio) + 'x)';
+  return '1:' + opts.h.ratio;
 }
 
-// The full-height right-side info panel, replacing the old bottom title-block strip - firm identity,
-// a key plan (reusing the exact same map asset the Location Plan sheet already fetched, just shown
-// smaller), client/project/drawing identity, data source, a blank approvals table and P.Eng seal
-// placeholder (Contour doesn't track a real approval workflow, so these print blank/ready-to-sign
-// rather than faked), the sheet's real scale, a blank revisions table, and the drawing/sheet/date
-// grid pinned to the bottom via margin-top:auto.
-function buildInfoPanel(sheetDesc, sheetNum, totalSheets, keyPlanHtml, scaleHtml){
+// The bottom title block - matched directly against a real reference (north arrow + a small
+// amendments/revisions table above a labelled Site/Scale/Date/Drawn By over Title/Project No./
+// Drawing No./Sheet No. grid, with a firm-identity block spanning both rows on the right) rather than
+// the full-height side panel from the previous round, which wasn't the right look for this app.
+// Site combines Client + Project (Contour tracks both; the reference's single "site" field doesn't
+// distinguish them). Approvals/revisions print genuinely blank - Contour doesn't track a real
+// approval or revision workflow, so faking names/dates would be worse than leaving them ready to fill in.
+function buildTitleBlock2(sheetDesc, sheetNum, totalSheets, scaleText){
   const firmName = document.getElementById('prFirmName').value.trim();
   const firmContact = document.getElementById('prFirmContact').value.trim();
   const projectTitle = document.getElementById('prProjectTitle').value.trim();
@@ -2605,34 +2573,33 @@ function buildInfoPanel(sheetDesc, sheetNum, totalSheets, keyPlanHtml, scaleHtml
   const drawingNo = document.getElementById('prDrawingNo').value.trim();
   const drawnBy = document.getElementById('prDrawnBy').value.trim();
   const dash = '—';
-  return '<div class="pr-infopanel">' +
-    '<div class="pr-ip-firm">' +
-      '<div class="pr-ip-mark"><svg width="8" height="8" viewBox="0 0 24 24" fill="none"><path d="M3 17l5-7 4 4 5-8 4 5" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' +
-      '<div class="pr-ip-name">' + escHtml(firmName || 'Contour') + '</div>' +
-      '<div class="pr-ip-tag">' + (firmName ? 'Consulting Engineers' : 'Generated Drawing') + '</div>' +
-      (firmContact ? '<div class="pr-ip-contact">' + escHtml(firmContact) + '</div>' : '') +
+  const siteText = [client, projectTitle].filter(Boolean).join(' — ') || dash;
+  const compassSvg = '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="18" fill="none" stroke="#1a1a2e" stroke-width="1.6"/><path d="M20 6 L27 24 L20 20 L13 24 Z" fill="#1a1a2e"/><text x="20" y="33" font-size="9" font-weight="800" text-anchor="middle" fill="#1a1a2e" font-family="Arial, sans-serif">N</text></svg>';
+  return '<div class="pr-tb2">' +
+    '<div class="pr-tb2-top">' +
+      '<div class="pr-tb2-compass">' + compassSvg + '</div>' +
+      '<div class="pr-tb2-rev"><table>' +
+        '<tr><th colspan="4" class="pr-tb2-amend-hdr">Amendments</th></tr>' +
+        '<tr><th>Rev</th><th>Description</th><th>By</th><th>Date</th></tr>' +
+        '<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>' +
+      '</table></div>' +
     '</div>' +
-    '<div class="pr-ip-section"><div class="pr-ip-label">Key Plan (N.T.S.)</div><div class="pr-ip-keyplan">' + keyPlanHtml + '<div class="pr-ip-keyplan-n">N</div></div></div>' +
-    '<div class="pr-ip-section"><div class="pr-ip-label">Client</div><div class="pr-ip-value">' + escHtml(client || dash) + '</div></div>' +
-    '<div class="pr-ip-section"><div class="pr-ip-label">Project</div><div class="pr-ip-value">' + escHtml(projectTitle || dash) + '</div></div>' +
-    '<div class="pr-ip-section"><div class="pr-ip-label">Drawing Title</div><div class="pr-ip-value">' + escHtml(sheetDesc) + '</div></div>' +
-    '<div class="pr-ip-section"><div class="pr-ip-label">Data Source</div><div class="pr-ip-datasource">' +
-      '<div>Ground: Ontario LiDAR DTM (LIO)</div><div>Imagery: Ontario Orthophotography</div><div>Datum: CGVD2013 / WGS84</div>' +
-    '</div></div>' +
-    '<div class="pr-ip-section"><div class="pr-ip-label">Approvals</div><table class="pr-ip-table"><tr><th></th><th>Name / Init.</th><th>Date</th></tr>' +
-      '<tr><td>Designed</td><td></td><td></td></tr>' +
-      '<tr><td>Drawn</td><td>' + escHtml(drawnBy) + '</td><td></td></tr>' +
-      '<tr><td>Checked</td><td></td><td></td></tr>' +
-      '<tr><td>Approved</td><td></td><td></td></tr>' +
-    '</table></div>' +
-    '<div class="pr-ip-seal"><div class="pr-ip-seal-circle">SEAL</div><div class="pr-ip-seal-note">PROFESSIONAL ENGINEER · ONTARIO</div></div>' +
-    '<div class="pr-ip-section">' + scaleHtml + '</div>' +
-    '<div class="pr-ip-section"><div class="pr-ip-label">Revisions</div><table class="pr-ip-table"><tr><th>Rev</th><th>Date</th><th>Description</th></tr><tr><td>&nbsp;</td><td></td><td></td></tr></table></div>' +
-    '<div class="pr-ip-idgrid">' +
-      '<div class="pr-ip-idcell"><div class="pr-ip-label">Project No.</div><div class="pr-ip-value">' + escHtml(projectNo || dash) + '</div></div>' +
-      '<div class="pr-ip-idcell"><div class="pr-ip-label">Sheet</div><div class="pr-ip-value">' + sheetNum + ' of ' + totalSheets + '</div></div>' +
-      '<div class="pr-ip-idcell pr-ip-full pr-ip-drawingno"><div class="pr-ip-label">Drawing No.</div><div class="pr-ip-value">' + escHtml(drawingNo || dash) + '</div></div>' +
-      '<div class="pr-ip-idcell pr-ip-full"><div class="pr-ip-label">Date</div><div class="pr-ip-value">' + new Date().toLocaleDateString() + '</div></div>' +
+    '<div class="pr-tb2-grid">' +
+      '<div class="pr-tb2-cell pr-tb2-c-site"><span class="pr-tb2-label">Site</span><span class="pr-tb2-value">' + escHtml(siteText) + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-scale"><span class="pr-tb2-label">Scale</span><span class="pr-tb2-value">' + escHtml(scaleText) + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-date"><span class="pr-tb2-label">Date</span><span class="pr-tb2-value">' + new Date().toLocaleDateString() + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-drawnby"><span class="pr-tb2-label">Drawn By</span><span class="pr-tb2-value">' + escHtml(drawnBy || dash) + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-title"><span class="pr-tb2-label">Title</span><span class="pr-tb2-value">' + escHtml(sheetDesc) + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-projno"><span class="pr-tb2-label">Project No.</span><span class="pr-tb2-value">' + escHtml(projectNo || dash) + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-drawno"><span class="pr-tb2-label">Drawing No.</span><span class="pr-tb2-value">' + escHtml(drawingNo || dash) + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-sheetno"><span class="pr-tb2-label">Sheet No.</span><span class="pr-tb2-value">' + sheetNum + ' of ' + totalSheets + '</span></div>' +
+      '<div class="pr-tb2-cell pr-tb2-c-firm">' +
+        '<div class="pr-tb2-logo"><svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M3 17l5-7 4 4 5-8 4 5" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' +
+        '<div>' +
+          '<div class="pr-tb2-firmname">' + escHtml(firmName || 'Contour') + '</div>' +
+          (firmContact ? '<div class="pr-tb2-firmcontact">' + escHtml(firmContact) + '</div>' : '') +
+        '</div>' +
+      '</div>' +
     '</div>' +
   '</div>';
 }
@@ -2749,16 +2716,6 @@ async function generatePdfReport(){
     const scaleBarHtml = '<div class="pr-scale-bar">' + fmtDist(barMeters) + '<div class="pr-scale-line" style="width:' + barPx.toFixed(0) + 'px;"></div></div>';
     const locationPlanScale = computeScaleInfo(finalBboxW, imgW);
 
-    // Key plan for the info panel - the exact same aerial asset as the Location Plan sheet above,
-    // just shown small with a plain line/dots (no station ticks - illegible at this size, just
-    // visual noise), so every sheet in the set carries a locator without a second fetch.
-    const keyPlanOverlaySvg = '<svg width="'+imgW+'" height="'+imgH+'" viewBox="0 0 '+imgW+' '+imgH+'" xmlns="'+NS+'">' +
-      '<path d="'+linePath+'" fill="none" stroke="#ff6a3d" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>' +
-      '<circle cx="'+startPx.x.toFixed(1)+'" cy="'+startPx.y.toFixed(1)+'" r="10" fill="#22c55e" stroke="#fff" stroke-width="3"/>' +
-      '<circle cx="'+endPx.x.toFixed(1)+'" cy="'+endPx.y.toFixed(1)+'" r="10" fill="#e0483e" stroke="#fff" stroke-width="3"/>' +
-    '</svg>';
-    const keyPlanHtml = '<img src="'+mapImgUrl+'">' + keyPlanOverlaySvg;
-
     // Plan & Profile sheet - the plan strip straightened so its horizontal axis is exactly station
     // distance (see buildStraightenedPlanImg), stacked directly above a matching full-extent profile
     // chart at the identical w/pad/scale, with dashed match-lines tying the two together at round
@@ -2768,11 +2725,20 @@ async function generatePdfReport(){
     // ppPlanH/ppProfileH are expressed as FRACTIONS of ppW (tuned against a Letter-landscape ppW of
     // 1160) rather than fixed pixel constants, so a much bigger chosen sheet doesn't end up with a
     // huge wide plan strip over a comparatively tiny, unscaled profile chart underneath it.
-    const ppW = mainContentWidthPx(true), ppPad = { l: 58, r: 16 }, ppProfileH = Math.round(ppW * 0.371);
+    const ppW = mainContentWidthPx(true), ppPad = { l: 58, r: 16 };
     const ppScale = (ppW - ppPad.l - ppPad.r) / totalLen;
     const ppBufferM = parseFloat(document.getElementById('corridorWidth').value) || 20;
     const ppPlanHMin = Math.round(ppW * 0.172), ppPlanHMax = Math.round(ppW * 0.345);
     const ppPlanH = Math.max(ppPlanHMin, Math.min(ppPlanHMax, Math.round(2 * ppBufferM * ppScale)));
+    // ppProfileH used to be a flat fraction of ppW, tuned back when the title block was a side panel
+    // that cost this sheet no vertical space at all - now that it's a real bottom block eating a
+    // fixed ~42mm off every sheet's height, that fraction could add up to more than the landscape
+    // page actually has left over (confirmed: it did, a real overflow onto a 2nd physical page).
+    // mainContentHeightPx already reserves the title block; cap the combined plan+profile height to
+    // whatever it says is actually left, keeping ppPlanH (driven by the real corridor width) intact
+    // and shrinking only the profile chart if the two don't both fit.
+    const ppAvailH = mainContentHeightPx(true, 12);
+    const ppProfileH = Math.max(150, Math.min(Math.round(ppW * 0.371), ppAvailH - ppPlanH));
     let planImgDataUrl = null, planProfileError = null;
     try{
       planImgDataUrl = await buildStraightenedPlanImg(sr, ppW, ppPad, ppPlanH, ppScale, totalLen);
@@ -2873,56 +2839,48 @@ async function generatePdfReport(){
     }
     const attribution = 'Ground elevation: Ontario LiDAR DTM (Land Information Ontario), 0.5m resolution. Aerial imagery: Ontario Orthophotography (LIO). Vertical datum CGVD2013, horizontal WGS84. Generated by Contour.';
 
-    // One .pr-page per sheet - each a bordered drawing frame, its main content on the left
-    // (.pr-main) and the full-height info panel on the right (buildInfoPanel) - standard
-    // multi-sheet drawing-set convention, rather than one long continuously-flowing page. Sheets 4+
-    // (cross-sections) only exist when there's a design grade to have stations from, and there can
-    // be more than one of them once an interval produces more cards than fit on a single sheet.
+    // One .pr-page per sheet - content on top, the real bottom title block (buildTitleBlock2) pinned
+    // to the bottom via margin-top:auto - standard multi-sheet drawing-set convention, rather than
+    // one long continuously-flowing page. Sheets 4+ (cross-sections) only exist when there's a design
+    // grade to have stations from, and there can be more than one once an interval produces more
+    // cards than fit on a single sheet.
     const sheet1 =
       '<div class="pr-page' + (locationPlanLandscape ? ' pr-landscape' : '') + '">' +
-        '<div class="pr-main">' +
-          '<div class="pr-sheet-title">Location Plan<span class="pr-sheet-sub">Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</span></div>' +
-          '<div class="pr-sheet-content">' +
-            '<div class="pr-map-wrap"><img id="prMapImg" src="'+mapImgUrl+'">' + mapOverlaySvg + northArrowHtml + scaleBarHtml + '</div>' +
-          '</div>' +
-          '<div class="pr-footer">' + attribution + '</div>' +
+        '<div class="pr-sheet-title">Location Plan<span class="pr-sheet-sub">Length ' + fmtDist(lastLength) + ' · ' + profile.length + ' samples</span></div>' +
+        '<div class="pr-sheet-content">' +
+          '<div class="pr-map-wrap"><img id="prMapImg" src="'+mapImgUrl+'">' + mapOverlaySvg + northArrowHtml + scaleBarHtml + '</div>' +
         '</div>' +
-        buildInfoPanel('Location Plan', 1, totalSheets, keyPlanHtml, buildScaleHtml('h', { h: locationPlanScale })) +
+        '<div class="pr-footer">' + attribution + '</div>' +
+        buildTitleBlock2('Location Plan', 1, totalSheets, buildScaleText('h', { h: locationPlanScale })) +
       '</div>';
     const sheet2 =
       '<div class="pr-page pr-landscape">' +
-        '<div class="pr-main">' +
-          '<div class="pr-sheet-title">Plan &amp; Profile<span class="pr-sheet-sub">Straightened Alignment · Stations Aligned</span></div>' +
-          '<div class="pr-sheet-content">' +
-            '<div class="pr-pp-wrap">' +
-              '<div class="pr-pp-plan">' + ppPlanContent + '<div class="pr-pp-note">Plan straightened along the alignment - see Location Plan (Sheet 1) for true north orientation. Corridor shown ±' + fmtDist(ppBufferM) + '.</div></div>' +
-              '<div class="pr-pp-profile">' + profileSvg + '</div>' +
-              ppMatchSvg +
-            '</div>' +
+        '<div class="pr-sheet-title">Plan &amp; Profile<span class="pr-sheet-sub">Straightened Alignment · Stations Aligned</span></div>' +
+        '<div class="pr-sheet-content">' +
+          '<div class="pr-pp-wrap">' +
+            '<div class="pr-pp-plan">' + ppPlanContent + '<div class="pr-pp-note">Plan straightened along the alignment - see Location Plan (Sheet 1) for true north orientation. Corridor shown ±' + fmtDist(ppBufferM) + '.</div></div>' +
+            '<div class="pr-pp-profile">' + profileSvg + '</div>' +
+            ppMatchSvg +
           '</div>' +
         '</div>' +
-        buildInfoPanel('Plan & Profile', 2, totalSheets, keyPlanHtml, buildScaleHtml('hv', planProfileScale)) +
+        buildTitleBlock2('Plan & Profile', 2, totalSheets, buildScaleText('hv', planProfileScale)) +
       '</div>';
     const sheet3 =
       '<div class="pr-page">' +
-        '<div class="pr-main">' +
-          '<div class="pr-sheet-title">Profile Summary' + (designGrade ? '<span class="pr-sheet-sub">With Design Grade &amp; Cut/Fill</span>' : '') + '</div>' +
-          '<div class="pr-sheet-content">' +
-            statsClone.outerHTML +
-            cutFillHtml +
-          '</div>' +
+        '<div class="pr-sheet-title">Profile Summary' + (designGrade ? '<span class="pr-sheet-sub">With Design Grade &amp; Cut/Fill</span>' : '') + '</div>' +
+        '<div class="pr-sheet-content">' +
+          statsClone.outerHTML +
+          cutFillHtml +
         '</div>' +
-        buildInfoPanel('Profile Summary', 3, totalSheets, keyPlanHtml, buildScaleHtml('note', { text: 'N.T.S.' })) +
+        buildTitleBlock2('Profile Summary', 3, totalSheets, buildScaleText('note', { text: 'N.T.S.' })) +
       '</div>';
     const xsSheets = xsSheetGroups.map((cards, idx) => {
       const sheetNum = 4 + idx;
       const subLabel = xsSheetGroups.length > 1 ? (xsIntervalLabel + ' · Sheet ' + (idx+1) + ' of ' + xsSheetGroups.length) : xsIntervalLabel;
       return '<div class="pr-page pr-landscape">' +
-        '<div class="pr-main">' +
-          '<div class="pr-sheet-title">Cross Sections<span class="pr-sheet-sub">' + subLabel + '</span></div>' +
-          '<div class="pr-sheet-content"><div class="pr-xs-row">' + cards.join('') + '</div></div>' +
-        '</div>' +
-        buildInfoPanel('Cross Sections', sheetNum, totalSheets, keyPlanHtml, buildScaleHtml('note', { text: 'AS SHOWN' })) +
+        '<div class="pr-sheet-title">Cross Sections<span class="pr-sheet-sub">' + subLabel + '</span></div>' +
+        '<div class="pr-sheet-content"><div class="pr-xs-row">' + cards.join('') + '</div></div>' +
+        buildTitleBlock2('Cross Sections', sheetNum, totalSheets, buildScaleText('note', { text: 'AS SHOWN' })) +
       '</div>';
     }).join('');
 
