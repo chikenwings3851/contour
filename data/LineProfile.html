@@ -4122,6 +4122,16 @@ function applyXsStationList(autoStations){
 // profile finishes building; the auto-spaced part doesn't change afterward (only the per-station
 // fetch width, read live from corridorWidth) - custom stations are added later via addCustomStation.
 function buildXsStationList(){
+  // Custom stations are only clamped once, at insertion (addCustomStation) - re-clamp against the
+  // current line length here too, since this runs again every time the profile is rebuilt
+  // (including after an edit-handle drag reruns it shorter). Left unclamped, a custom station added
+  // near the far end could end up beyond the new endpoint: still listed (starred) in the dropdown,
+  // but silently snapping to the new endpoint via profilePointAtDist() once selected, so its label
+  // no longer matches the cross-section actually shown.
+  if(profile && profile.length){
+    const totalLen = profile[profile.length-1].dist;
+    xsCustomStations = xsCustomStations.map(d => Math.max(0, Math.min(totalLen, d)));
+  }
   applyXsStationList(computeAutoXsStations());
 }
 
@@ -5095,6 +5105,12 @@ function setUnit(sys){
   document.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('ghost-active', b.dataset.unit === sys));
   if(profile){ renderStats(profile, lastLength); refreshChart(); }
   if(designGrade) renderGradeEditor();
+  // The Cross Section chart and any open 3D station-marker labels bake in units at their own render
+  // time and were never told to refresh here - they used to keep showing the old units until
+  // something else (changing station, moving the VE slider, editing the grade) happened to force a
+  // redraw. Both of these are cheap "redraw from cache, no network fetch" calls.
+  refreshXsCharts();
+  refreshStationMarkers3DIfOpen();
 }
 function setVE(v){
   veMode = v;
