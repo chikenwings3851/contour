@@ -2,7 +2,7 @@
 
 **Draw a line on a map. Get its real ground elevation profile, a 3D terrain view, and cross-sections — built on Ontario's free public LiDAR.**
 
-![Contour — 3D Terrain, Elevation Profile, and Cross Section open together](docs/screenshot.png)
+![Contour — 3D Terrain, Elevation Profile, and Cross Section open together over a rural road near Perth, Ontario](docs/screenshot.png)
 
 ## What it does
 
@@ -29,8 +29,10 @@ No installation, no account, no build step. It's one HTML file that runs entirel
 
 **Export**
 - LiDAR corridor export as a georeferenced GeoTIFF
-- Combined PDF report (map, chart, stats, cross-sections)
+- Combined PDF report — location plan, plan & profile, cross-sections, and a real engineering title block (scale, stationing, north arrow, revisions)
 - Save/reopen a project as a `.json` file
+
+![Contour's PDF report — Location Plan sheet with north arrow, scale bar, stationing, and a full title block](docs/screenshot-report.png)
 
 **Onboarding**
 - A short first-run tutorial for new users, reachable anytime from the header
