@@ -4548,6 +4548,17 @@ function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
 
 function renderStats(prof, length){
   const elevs = prof.filter(p=>p.elev!=null);
+  // A line drawn entirely outside LiDAR coverage (or a hand-edited/corrupted project file with
+  // structurally valid but all-null elevations - only checked for length>=2 on load, never for any
+  // real elevation) used to crash here reading .elev off undefined instead of showing a clear
+  // message.
+  if(!elevs.length){
+    document.getElementById('statsGrid').innerHTML =
+      '<div class="stat wide"><div class="label">No Data</div><div class="value" style="font-size:14px;">No valid elevation data along this line - it may be entirely outside LiDAR coverage.</div></div>';
+    document.getElementById('statsFootnote').textContent = prof.length + ' sample points along the line';
+    document.getElementById('statsCard').style.display = '';
+    return;
+  }
   const first = elevs[0], last = elevs[elevs.length-1];
   let minP = elevs[0], maxP = elevs[0];
   let rise = 0, fall = 0;
@@ -4722,6 +4733,10 @@ function computeChartYRange(prof, xMinM, xMaxM){
   // elevation range, which defeats the point of zooming in to see vertical detail.
   const visible = prof.filter(p => p.elev!=null && p.dist >= xMinM && p.dist <= xMaxM);
   const elevsM = (visible.length ? visible : prof.filter(p=>p.elev!=null)).map(p=>p.elev);
+  // Math.min/max(...[]) on a line with no valid elevation samples at all (entirely outside LiDAR
+  // coverage) returns Infinity/-Infinity - callers then divide by (yMaxM-yMinM), producing NaN chart
+  // coordinates instead of a clean empty range.
+  if(!elevsM.length) return { yMinM: 0, yMaxM: 1 };
   let realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
   if(designGrade){
     designGrade.points.forEach(pt => { if(pt.elev < realMin) realMin = pt.elev; if(pt.elev > realMax) realMax = pt.elev; });
@@ -4934,6 +4949,7 @@ function computeCutFillStats(){
 document.getElementById('btnAddGrade').addEventListener('click', () => {
   if(!profile) return;
   const valid = profile.filter(p=>p.elev!=null);
+  if(!valid.length){ showToast('No valid elevation data along this line to grade against.'); return; }
   designGrade = { points: [
     { id: designGradeNextId++, dist: valid[0].dist, elev: valid[0].elev },
     { id: designGradeNextId++, dist: valid[valid.length-1].dist, elev: valid[valid.length-1].elev }
