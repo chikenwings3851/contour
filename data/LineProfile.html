@@ -1206,6 +1206,15 @@ let veMode = 'auto';       // 'auto' | '1' | '2' | '5' | '10' | '20'
 function distValue(m){ return unitSystem === 'imperial' ? m * M_TO_FT : m; }
 function elevValue(m){ return unitSystem === 'imperial' ? m * M_TO_FT : m; }
 
+// Single source of truth for reading the channel bottom-width/side-slope inputs - both fields have
+// a min="0" HTML hint but nothing actually enforces it, so Math.max(0,...) clamps a typed negative
+// value (which would otherwise produce a physically-impossible negative cut/fill volume) rather than
+// just falling back on blank/unparseable input. Was previously re-read ad hoc at 4 different call
+// sites, one of which (Save Project) used the wrong fallback (`|| 1`/`|| 2` instead of `|| 0`),
+// silently turning a real, valid 0 into a different channel shape on save.
+function currentBottomWidth(){ return Math.max(0, parseFloat(document.getElementById('bottomWidth').value) || 0); }
+function currentSideSlope(){ return Math.max(0, parseFloat(document.getElementById('sideSlope').value) || 0); }
+
 function fmtDist(m){
   if(unitSystem === 'imperial'){
     const ft = m * M_TO_FT;
@@ -2091,8 +2100,8 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     profile,
     lastLength,
     designGrade,
-    bottomWidth: parseFloat(document.getElementById('bottomWidth').value) || 1,
-    sideSlope: parseFloat(document.getElementById('sideSlope').value) || 2,
+    bottomWidth: currentBottomWidth(),
+    sideSlope: currentSideSlope(),
     unitSystem,
     veMode,
     mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() },
@@ -2278,8 +2287,8 @@ function computeChannelTemplate(stationDist, xsPoints){
   if(!centreGround || centreGround.elev == null) return null;
   const designElevHere = designElevAt(stationDist);
   const depth = Math.abs(centreGround.elev - designElevHere);
-  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
-  const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+  const bottomWidth = currentBottomWidth();
+  const sideSlope = currentSideSlope();
   const halfN = bottomWidth / 2;
   const isCut = centreGround.elev >= designElevHere;
   const xsLookup = (offset) => {
@@ -3803,8 +3812,8 @@ function buildDesignGradeLine3D(ve, meanElev){
 // cut/fill convention as the 2D chart's shaded bands and the existing cut/fill stakes above.
 function buildDesignChannel3D(ve, meanElev, precise){
   if(!designGrade || !profile || !profile.length || !view3dGridInfo) return null;
-  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
-  const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+  const bottomWidth = currentBottomWidth();
+  const sideSlope = currentSideSlope();
   const epsg = 'EPSG:' + view3dGridInfo.sr;
   const LIFT = Math.max(ve * 0.15, 0.3);
   const cutColor = new THREE.Color(0xe0483e), fillColor = new THREE.Color(0x0d9f6e);
@@ -4686,12 +4695,30 @@ function computeChartYRange(prof, xMinM, xMaxM){
 // sample short of it.
 function splitCutFillRuns(prof){
   const runs = [];
-  let current = null, prevSample = null;
+  let current = null, prevSample = null, pendingBoundary = null;
   for(const p of prof){
-    if(p.elev == null){ if(current) runs.push(current); current=null; prevSample=null; continue; }
+    if(p.elev == null){ if(current) runs.push(current); current=null; prevSample=null; pendingBoundary=null; continue; }
     const design = designElevAt(p.dist);
     const diff = p.elev - design;
     const kind = diff > 0 ? 'cut' : (diff < 0 ? 'fill' : 'none');
+    const point = { dist:p.dist, elev:p.elev, design };
+
+    // An exact-zero sample (diff===0) used to become its own single-point 'none' run, which the
+    // final filter below then discarded entirely - silently dropping it from BOTH neighbouring
+    // runs. That's not a rare edge case: "Add Design Grade" sets both endpoints' elevation to
+    // exactly match the ground there, so this fires at both ends of the line on every ordinary use
+    // of the feature, and computeCutFillStats' Average-End-Area sum quietly skipped the cut/fill
+    // volume wedge nearest each end. Fixed by treating it as a shared boundary point instead (the
+    // same way the interpolated crossing point above is already shared between the run it closes
+    // and the run it opens) - attach it to whichever run is currently open, and seed the next run
+    // with it too if a new one starts right after.
+    if(kind === 'none'){
+      if(current) current.points.push(point);
+      pendingBoundary = point;
+      prevSample = { dist:p.dist, elev:p.elev, diff, kind };
+      continue;
+    }
+
     if(prevSample && prevSample.kind !== kind && prevSample.kind !== 'none' && kind !== 'none'){
       const t = prevSample.diff / (prevSample.diff - diff);
       const crossDist = prevSample.dist + (p.dist-prevSample.dist)*t;
@@ -4702,8 +4729,10 @@ function splitCutFillRuns(prof){
     if(!current || current.kind !== kind){
       if(current) runs.push(current);
       current = { kind, points: [] };
+      if(pendingBoundary) current.points.push(pendingBoundary);
     }
-    current.points.push({ dist:p.dist, elev:p.elev, design });
+    pendingBoundary = null;
+    current.points.push(point);
     prevSample = { dist:p.dist, elev:p.elev, diff, kind };
   }
   if(current) runs.push(current);
@@ -4818,8 +4847,8 @@ function realGroundLookupAt(dist){
 // (this function can run on every mousemove tick then) or wherever real ground data runs out.
 function computeCutFillStats(){
   const runs = splitCutFillRuns(profile);
-  const bottomWidth = parseFloat(document.getElementById('bottomWidth').value) || 0;
-  const sideSlope = parseFloat(document.getElementById('sideSlope').value) || 0;
+  const bottomWidth = currentBottomWidth();
+  const sideSlope = currentSideSlope();
   const precise = !!view3dGridInfo && !gradeDragState.active;
   let cutVolume = 0, fillVolume = 0, maxCut = null, maxFill = null;
 
@@ -4941,13 +4970,21 @@ function renderGradeEditor(){
   list.querySelectorAll('.grade-point-row').forEach(row => {
     const idx = parseInt(row.dataset.idx, 10);
     row.querySelector('.gp-dist').addEventListener('change', (e) => {
-      designGrade.points[idx].dist = parseFloat(e.target.value) || 0;
+      // A cleared/non-numeric field used to silently snap this point to station 0 (`|| 0`),
+      // re-sorting it to the very start of the alignment with no warning. Reject it instead - the
+      // re-render below restores the input to the point's last valid value.
+      const v = parseFloat(e.target.value);
+      if(isNaN(v)){ renderGradeEditor(); return; }
+      designGrade.points[idx].dist = v;
       designGrade.points.sort((a,b) => a.dist - b.dist);
       renderGradeEditor();
       refreshChart();
     });
     row.querySelector('.gp-elev').addEventListener('change', (e) => {
+      // A cleared/non-numeric field used to write NaN straight into designGrade, silently breaking
+      // the grade line, cut/fill shading, and 3D channel with no explanation. Reject it instead.
       const v = parseFloat(e.target.value);
+      if(isNaN(v)){ renderGradeEditor(); return; }
       designGrade.points[idx].elev = unitSystem === 'imperial' ? v / M_TO_FT : v;
       renderCutFillStats();
       refreshChart();
