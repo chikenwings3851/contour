@@ -4757,8 +4757,16 @@ function findDaylightPoint(design, halfN, sideSlope, isCut, sign, groundLookup){
     }
     prevOffset = offset; prevElev = elev; prevGround = ground;
   }
-  if(lastCrossing) return lastCrossing;
-  return { offset: prevOffset, elev: prevElev }; // never crossed within maxH - extremely steep/deep edge case
+  // No real crossing found - either the search ran off the edge of the fetched grid or exhausted
+  // maxH without the slope ever meeting the ground again. Used to fall back to returning the
+  // hypothetical design-slope surface's own last point ({offset:prevOffset, elev:prevElev}) here,
+  // which is NOT real ground - it's just wherever the unbounded design slope had walked out to,
+  // often tens of metres from the actual terrain. Every caller already treats a null return as "no
+  // real daylight point" and falls back to the flat-ground assumption instead, so return null (as
+  // this function's own doc comment above already promised) rather than that fabricated point,
+  // which was rendering as huge, wrongly-placed spikes in the 3D channel mesh and could also have
+  // silently thrown off "precise" cut/fill volumes wherever it was hit.
+  return lastCrossing;
 }
 
 // Shoelace formula for a simple (non-self-intersecting) polygon in (offset, elevation) space -
