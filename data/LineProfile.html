@@ -1555,6 +1555,11 @@ document.addEventListener('keydown', (e) => {
 // ---------- drawing state ----------
 
 let drawing = false;
+// True while generatePdfReport() is running - it reads profile/designGrade repeatedly across
+// several await boundaries (network fetches) with no snapshot, so clicking Draw Line partway
+// through (resetAll() nulls those globals immediately) could crash the in-flight report or produce
+// a sheet mixing imagery/data from two different, unrelated lines.
+let reportGenerating = false;
 let vertices = [];       // {lat,lng}
 let vertexMarkers = [];
 let drawLine = null;      // L.Polyline while drawing / final result (visual only once finished)
@@ -1599,6 +1604,7 @@ const statusEl = document.getElementById('status');
 
 btnDraw.addEventListener('click', () => {
   if(drawing) return;
+  if(reportGenerating){ showToast('A PDF report is still being built - wait for it to finish before starting a new line.'); return; }
   resetAll();
   drawing = true;
   map.doubleClickZoom.disable();
@@ -2686,6 +2692,7 @@ async function generatePdfReport(){
   const origHtml = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = spinnerTag() + 'Building report…';
+  reportGenerating = true;
   try{
     const valid = profile.filter(p => p.elev != null);
     if(!valid.length) throw new Error('no valid elevation data to report on');
@@ -3054,6 +3061,7 @@ async function generatePdfReport(){
   } catch(err){
     showToast('Report failed: ' + err.message);
   } finally {
+    reportGenerating = false;
     btn.disabled = false;
     btn.innerHTML = origHtml;
   }
@@ -4224,7 +4232,14 @@ function syncXsSelects(stationDist){
   document.getElementById('xsSidebarStationSelect').value = stationDist;
 }
 
+let xsRequestId = 0; // lets a newer loadCrossSection() call ignore a still-finishing older one, mirroring profileRequestId
 async function loadCrossSection(stationDist){
+  // Unlike runProfile()/the address search box, this had no such guard until now - rapid station
+  // changes (clicking Next repeatedly, or dragging the map slider and releasing on a new station
+  // before the previous fetch resolves) could let an earlier, now-stale request resolve after a
+  // later one and overwrite the chart with the wrong station's data while the map marker/highlight
+  // (updated synchronously above) still correctly showed the later station.
+  const myXsRequestId = ++xsRequestId;
   // Remembered so a failed fetch (the Ontario DTM service is documented elsewhere in this file's
   // history as genuinely flaky under repeated short-segment queries) can roll everything back to
   // the last station that actually loaded, rather than leaving the map/chart highlight pointing at
@@ -4244,6 +4259,7 @@ async function loadCrossSection(stationDist){
   try{
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
     const xsPoints = await fetchCrossSection(stationDist, bufferM);
+    if(myXsRequestId !== xsRequestId) return; // a newer station change superseded this one while it was in flight
     lastXsPoints = xsPoints;
     const xsAreaResult = renderCrossSectionChart(xsPoints, stationDist, document.getElementById('xsSidebarChartWrap'), document.getElementById('xsSidebarChartTooltip'));
     if(xsOpen) renderCrossSectionChart(xsPoints, stationDist, document.getElementById('xsChartWrap'), document.getElementById('xsChartTooltip'));
@@ -4268,6 +4284,7 @@ async function loadCrossSection(stationDist){
     sidebarStatus.textContent = text;
     if(xsOpen) popupStatus.textContent = text;
   } catch(err){
+    if(myXsRequestId !== xsRequestId) return; // superseded - don't roll back a station the user has since moved past
     xsCurrentStationDist = prevStationDist;
     if(prevStationDist != null) syncXsSelects(prevStationDist);
     updateXsHighlight();
