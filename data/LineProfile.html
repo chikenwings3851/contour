@@ -1230,10 +1230,16 @@ function fmtElev(m){
 // conventions vary by agency, so imperial mode falls back to plain distance.
 function fmtStation(m){
   if(unitSystem === 'imperial') return fmtDist(m);
-  let km = Math.floor(m / 1000);
-  let rem = Math.round(m - km * 1000);
+  // Splitting a negative m directly (Math.floor(-50/1000)=-1, then "correcting" the remainder back
+  // up by 1000) produced a nonsensical label like "STA -1+950" for -50m. Split the magnitude and
+  // apply the sign to the whole label instead, matching how a negative station is normally written
+  // (e.g. "-0+050").
+  const neg = m < 0;
+  const absM = Math.abs(m);
+  let km = Math.floor(absM / 1000);
+  let rem = Math.round(absM - km * 1000);
   if(rem >= 1000){ rem -= 1000; km += 1; }
-  return 'STA ' + km + '+' + String(rem).padStart(3,'0');
+  return 'STA ' + (neg ? '-' : '') + km + '+' + String(rem).padStart(3,'0');
 }
 
 // ---------- geometry helpers ----------
@@ -2078,7 +2084,11 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
       const [lon, lat] = proj4(zoneEpsg, 'WGS84', [p.x, p.y]);
       return { lat, lng: lon };
     });
-    const outOfCanada = converted.some(v => v.lat < 40 || v.lat > 85 || v.lng < -145 || v.lng > -50);
+    // Written as "reject anything that ISN'T in bounds" rather than "reject anything out of bounds" -
+    // the original used < / > checks that are all false for a NaN coordinate (from a malformed DXF
+    // with a non-numeric ordinate), so .some() could return false and let NaN through. Inverting the
+    // in-bounds test means a NaN comparison correctly falls through to "not in bounds" instead.
+    const outOfCanada = converted.some(v => !(v.lat >= 40 && v.lat <= 85 && v.lng >= -145 && v.lng <= -50));
     if(outOfCanada){
       throw new Error('Converted coordinates don\'t land in Canada — this DXF likely uses a local/arbitrary coordinate system rather than real-world UTM, or try the other zone.');
     }
@@ -5855,12 +5865,13 @@ function roundRectPath(ctx,x,y,w,h,r){
 function buildExportChartSVG(prof, w, h){
   const EXPORT_COLORS = { grid:'#e7e9f2', axisText:'#8489a0', accent:'#5b5bf0', accentDark:'#4747d6', axisLine:'#c7cbdb', text:'#161824' };
   const pad = { l:72, r:24, t:20, b:52 };
-  const elevsM = prof.filter(p=>p.elev!=null).map(p=>p.elev);
-  const realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
-  const spanM = Math.max(realMax - realMin, 0.5);
-  const yPad = spanM * 0.08;
-  const yMinM = realMin - yPad, yMaxM = realMax + yPad;
   const xMinM = 0, xMaxM = prof[prof.length-1].dist || 1;
+  // Reuses the same Y-range logic as the live chart instead of an inline duplicate that never
+  // considered the design grade's own elevation values - previously, if a design grade's points sat
+  // outside the real ground's range, the exported PNG's Y-axis could be tighter than what the live
+  // chart actually shows. Also picks up computeChartYRange's empty-profile guard (a line with zero
+  // valid elevation samples used to produce Infinity/-Infinity here too).
+  const { yMinM, yMaxM } = computeChartYRange(prof, xMinM, xMaxM);
   const X = d => pad.l + (d - xMinM) / (xMaxM - xMinM) * (w - pad.l - pad.r);
   const Y = e => pad.t + (1 - (e - yMinM) / (yMaxM - yMinM)) * (h - pad.t - pad.b);
 
