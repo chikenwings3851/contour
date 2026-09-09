@@ -1687,6 +1687,13 @@ function resetAll(){
   document.querySelectorAll('.measure-toggle').forEach(b => b.classList.remove('ghost-active'));
   closeModal();
   closeView3D();
+  // view3dGridInfo belongs to whatever line it was fetched for - closeView3D() deliberately leaves
+  // it alone (closing the 3D popup should NOT downgrade the cut/fill stats panel back to the flat
+  // estimate for the line you were just looking at), but a brand new line means the old grid is for
+  // a different place entirely. Left uncleared, computeCutFillStats()/realGroundLookupAt() would
+  // silently keep treating it as valid "precise" terrain for the new line - real ground data from
+  // the wrong location, not just an imprecise fallback - until 3D was reopened.
+  view3dGridInfo = null;
   closeCrossSectionModal();
   closeGradeModal();
   // xsCurrentStationDist now drives the persistent sidebar card too (not just the popup, which is
@@ -3307,7 +3314,13 @@ function closeView3D(){
 }
 
 async function openView3D(){
-  if(!vertices.length) return;
+  // Without this, double-clicking the button (or clicking again before the corridor fetch below
+  // finishes - it's documented elsewhere in this file as slow/flaky) starts a second concurrent
+  // buildCorridorGrid() run, racing the first to write the shared progress bar and
+  // view3dGridInfo/view3dMesh. The 'M' keyboard shortcut already checked !view3dOpen before calling
+  // this; the button's own click handler never did, so the guard belongs here instead, where every
+  // caller gets it automatically.
+  if(!vertices.length || view3dOpen) return;
   view3dOpen = true;
   document.getElementById('view3dModal').style.display = 'block';
   bringToFront(document.querySelector('.view3d-panel'));
@@ -3900,8 +3913,17 @@ function buildDesignChannel3D(ve, meanElev, precise){
   return new THREE.Mesh(geometry, material);
 }
 
+// Bumped on every call, so a slow in-flight aerial texture load can tell it's been superseded by a
+// newer call (e.g. the user clicked Aerial then Plain again before the image finished loading) and
+// discard its result instead of clobbering whatever the newer call already decided.
+let view3dTexGeneration = 0;
 async function applyTerrainMaterial(mode){
   if(!view3dMesh) return;
+  const myGeneration = ++view3dTexGeneration;
+  // Captured before this call changes anything, so it can be disposed once we're done - every
+  // branch below used to just overwrite/drop material.map with no .dispose(), leaking a full
+  // (up to 2048x2048) GPU texture on every aerial reload or aerial->plain switch.
+  const oldMap = view3dMesh.material.map;
   if(mode === 'aerial'){
     try{
       const { xmin, ymax, W, H, sr } = view3dGridInfo;
@@ -3912,10 +3934,12 @@ async function applyTerrainMaterial(mode){
       const tex = await new Promise((resolve, reject) => {
         new THREE.TextureLoader().load(url, resolve, undefined, reject);
       });
+      if(myGeneration !== view3dTexGeneration){ tex.dispose(); return; }
       view3dMesh.material.map = tex;
       view3dMesh.material.color.set(0xffffff);
       view3dMesh.material.needsUpdate = true;
     } catch(err){
+      if(myGeneration !== view3dTexGeneration) return;
       view3dMesh.material.map = null;
       view3dMesh.material.color.set(0x8a9bb0);
       view3dMesh.material.needsUpdate = true;
@@ -3925,6 +3949,7 @@ async function applyTerrainMaterial(mode){
     view3dMesh.material.color.set(0x8a9bb0);
     view3dMesh.material.needsUpdate = true;
   }
+  if(oldMap) oldMap.dispose();
 }
 
 // ---------- cross sections ----------
