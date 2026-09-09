@@ -1675,6 +1675,7 @@ async function finishDrawing(){
 const IDLE_STATUS = 'Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.';
 
 btnClear.addEventListener('click', () => {
+  if(reportGenerating){ showToast('A PDF report is still being built - wait for it to finish before clearing.'); return; }
   if(profile && !confirm('Clear this line and its profile? This can\'t be undone.')) return;
   resetAll();
   statusEl.innerHTML = IDLE_STATUS;
@@ -1706,6 +1707,9 @@ function resetAll(){
   // silently keep treating it as valid "precise" terrain for the new line - real ground data from
   // the wrong location, not just an imprecise fallback - until 3D was reopened.
   view3dGridInfo = null;
+  // Also invalidates any corridor fetch from a previous openView3D() call that's still in flight -
+  // see view3dRequestId's own declaration for why.
+  view3dRequestId++;
   closeCrossSectionModal();
   closeGradeModal();
   // xsCurrentStationDist now drives the persistent sidebar card too (not just the popup, which is
@@ -2064,6 +2068,7 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
   const file = e.target.files[0];
   e.target.value = '';
   if(!file) return;
+  if(reportGenerating){ showToast('A PDF report is still being built - wait for it to finish before importing a new line.'); return; }
   statusEl.className = '';
   statusEl.innerHTML = 'Reading ' + file.name + '…';
   try{
@@ -2156,6 +2161,7 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
   const file = e.target.files[0];
   e.target.value = '';
   if(!file) return;
+  if(reportGenerating){ showToast('A PDF report is still being built - wait for it to finish before opening a project.'); return; }
   statusEl.className = '';
   statusEl.innerHTML = 'Reading ' + file.name + '…';
   try{
@@ -3194,6 +3200,12 @@ function buildFloat32GeoTIFF(elev,W,H,psx,psy,ulX,ulY,epsg){
 // a Three.js heightmap mesh with orbit controls, optionally textured with the real aerial photo.
 
 let view3dGridInfo = null;
+// Bumped in resetAll() whenever the underlying line changes. openView3D()'s corridor fetch is slow
+// enough that a new line can be drawn while it's still in flight - without this, the stale fetch
+// resolving afterward would overwrite the freshly-nulled/reassigned view3dGridInfo with the OLD
+// line's terrain grid, reintroducing the exact stale-terrain bug view3dGridInfo=null in resetAll()
+// was meant to close, just via the async path instead of the synchronous one.
+let view3dRequestId = 0;
 let view3dRenderer = null, view3dScene = null, view3dCamera = null, view3dControls = null;
 let view3dMesh = null, view3dAnimFrame = null, view3dOpen = false;
 let view3dMeasureGroup = null, stationsVisible3d = true;
@@ -3339,6 +3351,7 @@ async function openView3D(){
   // this; the button's own click handler never did, so the guard belongs here instead, where every
   // caller gets it automatically.
   if(!vertices.length || view3dOpen) return;
+  const myView3dRequestId = view3dRequestId;
   view3dOpen = true;
   document.getElementById('view3dModal').style.display = 'block';
   bringToFront(document.querySelector('.view3d-panel'));
@@ -3349,7 +3362,12 @@ async function openView3D(){
   resizeView3D();
   try{
     const bufferM = parseFloat(document.getElementById('corridorWidth').value);
-    view3dGridInfo = await buildCorridorGrid(bufferM, 'Building 3D terrain');
+    const grid = await buildCorridorGrid(bufferM, 'Building 3D terrain');
+    // A new line (resetAll) can be drawn while this fetch is still in flight - bail out before
+    // touching any state or UI so this stale result can't stomp over whatever the new line's own
+    // (possibly already-open, already-loading) 3D session has since set up.
+    if(myView3dRequestId !== view3dRequestId) return;
+    view3dGridInfo = grid;
     initThreeScene();
     rebuildTerrainGeometry(parseFloat(document.getElementById('ve3d').value));
     // The corridor grid just became available - upgrade the cut/fill stats panel from the fast
@@ -3358,10 +3376,16 @@ async function openView3D(){
     if(designGrade) renderCutFillStats();
     const activeTex = document.querySelector('#texToggle3d button.ghost-active').dataset.tex;
     await applyTerrainMaterial(activeTex);
+    if(myView3dRequestId !== view3dRequestId) return;
     statusDiv.classList.add('hidden');
     statusEl.className = '';
     statusEl.innerHTML = '3D terrain built — ' + view3dGridInfo.W + '×' + view3dGridInfo.H + ' points, full native 0.5m resolution (no downsampling).';
   } catch(err){
+    if(myView3dRequestId !== view3dRequestId) return; // superseded - don't clobber a newer 3D session's UI/state with this stale failure
+    // view3dOpen used to never get reset here - after any failure (bad UTM zone, DTM/aerial service
+    // down), the button silently no-op'd forever via the re-entrancy guard above, and the only way
+    // to make it work again was to first close and reopen the panel.
+    view3dOpen = false;
     statusDiv.classList.remove('hidden');
     statusDiv.textContent = 'Could not build 3D terrain: ' + err.message;
     hideProgressBar();
@@ -5053,7 +5077,11 @@ function renderGradeEditor(){
       // re-render below restores the input to the point's last valid value.
       const v = parseFloat(e.target.value);
       if(isNaN(v)){ renderGradeEditor(); return; }
-      designGrade.points[idx].dist = v;
+      // Clamp to the line's real extent, the same way addCustomStation() already does for cross-
+      // section stations - an unclamped negative or beyond-the-end value used to sit outside the
+      // chart's visible X-domain, rendering its drag handle off-screen with no way to grab it back.
+      const totalLen = profile[profile.length-1].dist;
+      designGrade.points[idx].dist = Math.max(0, Math.min(totalLen, v));
       designGrade.points.sort((a,b) => a.dist - b.dist);
       renderGradeEditor();
       refreshChart();
@@ -5910,6 +5938,10 @@ function buildExportChartSVG(prof, w, h){
 
 document.getElementById('btnExportPng').addEventListener('click', () => {
   if(!profile) return;
+  // Same all-null-elevation case guarded elsewhere (renderStats, Add Design Grade) - a line drawn
+  // entirely outside LiDAR coverage reaches here too, and the stats block below (elevs[0]/
+  // elevs[elevs.length-1]) would otherwise throw reading .elev off undefined.
+  if(!profile.some(p => p.elev != null)){ showToast('No valid elevation data along this line to export.'); return; }
   const scale = 2;
   const chartW = 860, chartH = 360;
   const svgStr = buildExportChartSVG(profile, chartW, chartH);
