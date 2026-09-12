@@ -872,6 +872,11 @@
           <span class="legend-item"><span class="legend-dot" style="background:#e0483e"></span>Cut</span>
           <span class="legend-item"><span class="legend-dot" style="background:#0d9f6e"></span>Fill</span>
         </div>
+        <div class="color-legend" id="coverLegend" style="display:none;">
+          <span class="legend-item"><span class="legend-dot" style="background:rgba(194,102,10,0.35);border:1px solid #c2660a"></span>Pipe barrel</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#6b7080"></span>Cover required</span>
+          <span class="legend-item"><span class="legend-dot" style="background:#e0483e"></span>Below min cover</span>
+        </div>
         <div id="gradePointsList"></div>
         <button id="btnAddGradePoint" style="width:100%;justify-content:center;margin-top:8px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -887,6 +892,17 @@
             <input type="number" id="sideSlope" step="0.1" min="0" value="2">
           </div>
         </div>
+        <div class="row" style="margin-top:8px;">
+          <div class="gp-field">
+            <label>Pipe Ø (mm)</label>
+            <input type="number" id="pipeDia" step="25" min="0" value="0" placeholder="0 = open channel">
+          </div>
+          <div class="gp-field">
+            <label>Min Cover (m)</label>
+            <input type="number" id="minCover" step="0.05" min="0" value="0.6">
+          </div>
+        </div>
+        <div class="datum-note" id="coverCheckNote" style="margin:6px 0 0;"></div>
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
         <div class="datum-note" id="cutFillPrecisionNote"></div>
         <div class="resize-handle" id="gradeResizeHandle" title="Drag to resize"></div>
@@ -1214,6 +1230,17 @@ function elevValue(m){ return unitSystem === 'imperial' ? m * M_TO_FT : m; }
 // silently turning a real, valid 0 into a different channel shape on save.
 function currentBottomWidth(){ return Math.max(0, parseFloat(document.getElementById('bottomWidth').value) || 0); }
 function currentSideSlope(){ return Math.max(0, parseFloat(document.getElementById('sideSlope').value) || 0); }
+
+// Minimum-cover check inputs. Pipe Ø is entered in mm (how pipe is actually specified/ordered) and
+// returned in metres to match every other elevation/distance in this app; 0 means "no pipe" - the
+// design grade is an open channel invert and the whole cover check switches off. The entered diameter
+// is treated as the pipe's full outside height (invert to crown) - deliberately NOT modelling wall
+// thickness, since nominal Ø is what a designer has on hand and inventing a wall thickness would be a
+// fabricated number, not a more accurate one. Both are raw metres/mm regardless of the metric/imperial
+// display toggle, exactly like the bottom-width/side-slope inputs above them.
+function currentPipeOD(){ return Math.max(0, parseFloat(document.getElementById('pipeDia').value) || 0) / 1000; }
+function currentMinCover(){ return Math.max(0, parseFloat(document.getElementById('minCover').value) || 0); }
+function coverCheckActive(){ return !!designGrade && currentPipeOD() > 0; }
 
 function fmtDist(m){
   if(unitSystem === 'imperial'){
@@ -2130,6 +2157,8 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     designGrade,
     bottomWidth: currentBottomWidth(),
     sideSlope: currentSideSlope(),
+    pipeDia: document.getElementById('pipeDia').value,
+    minCover: document.getElementById('minCover').value,
     unitSystem,
     veMode,
     mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() },
@@ -2176,6 +2205,10 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
 
     if(data.bottomWidth != null) document.getElementById('bottomWidth').value = data.bottomWidth;
     if(data.sideSlope != null) document.getElementById('sideSlope').value = data.sideSlope;
+    // Absent in projects saved before the cover check existed - fall back to the field defaults
+    // (Ø 0 = open channel, so an older project reopens behaving exactly as it did when saved).
+    document.getElementById('pipeDia').value = data.pipeDia != null ? data.pipeDia : '0';
+    document.getElementById('minCover').value = data.minCover != null ? data.minCover : '0.6';
     document.getElementById('prFirmName').value = data.prFirmName || '';
     document.getElementById('prFirmContact').value = data.prFirmContact || '';
     document.getElementById('prProjectTitle').value = data.prProjectTitle || '';
@@ -4785,6 +4818,15 @@ function computeChartYRange(prof, xMinM, xMaxM){
   if(designGrade){
     designGrade.points.forEach(pt => { if(pt.elev < realMin) realMin = pt.elev; if(pt.elev > realMax) realMax = pt.elev; });
     [designElevAt(xMinM), designElevAt(xMaxM)].forEach(e => { if(e < realMin) realMin = e; if(e > realMax) realMax = e; });
+    // The pipe crown and the required-cover line sit above the design invert, and on a shallow pipe
+    // under low ground they can sit above the ground line too - include them or the cover check's own
+    // lines get drawn outside the plot area, which is exactly where they matter most.
+    const od = currentPipeOD();
+    if(od > 0){
+      const top = od + currentMinCover();
+      [...designGrade.points.map(p => p.elev), designElevAt(xMinM), designElevAt(xMaxM)]
+        .forEach(e => { if(e + top > realMax) realMax = e + top; });
+    }
   }
   const spanM = Math.max(realMax - realMin, 0.5);
   const yPad = spanM * 0.08;
@@ -4838,6 +4880,79 @@ function splitCutFillRuns(prof){
   }
   if(current) runs.push(current);
   return runs.filter(r => r.kind !== 'none' && r.points.length >= 2);
+}
+
+// Minimum-cover check against the real ground, for a design grade being used as a PIPE INVERT rather
+// than an open channel bottom (a drain enclosure, a culvert run, a tile main). Cover at any station is
+// existing ground minus the pipe crown (invert + Ø), and a "shortfall" run is a contiguous stretch
+// where that cover is less than the required minimum - i.e. where the pipe is too shallow for the
+// ground it's under. Returns null when no pipe Ø is set, so every caller can treat "no pipe" as
+// "nothing to check" rather than special-casing it. Purely geometric: no loading, frost-depth, or
+// bedding assumptions are made here - the required minimum is whatever the designer enters.
+function computeCoverCheck(prof){
+  if(!designGrade) return null;
+  const od = currentPipeOD();
+  if(od <= 0) return null;
+  const minC = currentMinCover();
+  const raw = [];
+  let worst = null, cur = null;
+  for(const p of prof){
+    if(p.elev == null){ if(cur){ raw.push(cur); cur = null; } continue; }
+    const cover = p.elev - (designElevAt(p.dist) + od);
+    if(!worst || cover < worst.cover) worst = { dist: p.dist, cover };
+    if(cover < minC){
+      if(cur) cur.to = p.dist;
+      else cur = { from: p.dist, to: p.dist };
+    } else if(cur){ raw.push(cur); cur = null; }
+  }
+  if(cur) raw.push(cur);
+
+  // Real LiDAR ground is noisy at 0.5m sampling, so where cover hovers right at the minimum it
+  // crosses back and forth and produces a string of one-sample "stretches" - reporting those as
+  // separate findings overstates how many distinct problem areas there are (seen live: 5 reported
+  // where the chart plainly shows 2). Two shortfall areas a few metres apart are one area needing one
+  // fix, so runs closer together than ~8 samples get merged - derived from the profile's own real
+  // spacing rather than a fixed constant, so it still holds on a long line sampled more coarsely.
+  // Deliberately a merge and not a filter: a genuine isolated low spot still gets reported (as a
+  // zero-length stretch at its own station), it just isn't padded out into its own "area".
+  const spacing = prof.length > 1 ? Math.abs(prof[prof.length-1].dist - prof[0].dist) / (prof.length - 1) : 1;
+  const mergeGap = Math.max(2, spacing * 8);
+  const runs = [];
+  raw.forEach(r => {
+    const last = runs[runs.length-1];
+    if(last && r.from - last.to <= mergeGap) last.to = r.to;
+    else runs.push({ ...r });
+  });
+  const totalShortfall = runs.reduce((s, r) => s + (r.to - r.from), 0);
+  return { od, minC, runs, worst, totalShortfall };
+}
+
+// Path builders for the cover visuals, shared by the live chart and the print/report profile so the
+// two can't drift apart. `offset` is how far above the design invert to trace: 0 = the invert itself,
+// od = the pipe crown, od+minCover = the ground line the design actually requires. Traced through the
+// design's own break points (it's piecewise linear between them, so nothing is gained by sampling
+// finer) plus the two requested endpoints.
+function designOffsetStations(d0, d1){
+  const brk = designGrade.points.map(p => p.dist).filter(d => d > d0 && d < d1);
+  return [d0, ...brk.sort((a,b) => a-b), d1];
+}
+function designOffsetPath(d0, d1, offset, X, Y){
+  let path = '';
+  designOffsetStations(d0, d1).forEach((d, i) => {
+    path += (i === 0 ? 'M' : 'L') + X(d).toFixed(1) + ',' + Y(designElevAt(d) + offset).toFixed(1) + ' ';
+  });
+  return path;
+}
+// The pipe barrel itself as a closed band: along the invert one way, back along the crown the other.
+function pipeBandPath(d0, d1, od, X, Y){
+  const stations = designOffsetStations(d0, d1);
+  let path = '';
+  stations.forEach((d, i) => { path += (i === 0 ? 'M' : 'L') + X(d).toFixed(1) + ',' + Y(designElevAt(d)).toFixed(1) + ' '; });
+  for(let i = stations.length - 1; i >= 0; i--){
+    const d = stations[i];
+    path += 'L' + X(d).toFixed(1) + ',' + Y(designElevAt(d) + od).toFixed(1) + ' ';
+  }
+  return path + 'Z';
 }
 
 // Trapezoidal channel/trench cross-section (flat bottom + two side slopes expressed as a
@@ -5036,6 +5151,14 @@ document.getElementById('btnAddGradePoint').addEventListener('click', () => {
 });
 document.getElementById('bottomWidth').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 document.getElementById('sideSlope').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
+// Cover inputs change the chart itself (pipe barrel, crown, required-cover line), not just a stat -
+// so these also refresh the chart, unlike the two channel inputs above which only feed volume math.
+['pipeDia','minCover'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    renderCoverNote();
+    if(profile) refreshChart();
+  });
+});
 
 function renderGradeEditor(){
   if(!designGrade) return;
@@ -5121,7 +5244,39 @@ function renderCutFillStats(){
   document.getElementById('cutFillPrecisionNote').textContent = precise
     ? 'Volumes use a real per-side daylight search against the fetched corridor terrain (Average End Area Method) — bottom width + side slopes above, independent of the corridor width slider, which only controls how much terrain the 3D view/export shows.'
     : 'Volumes use a fast estimate (Average End Area Method, flat ground assumed on both sides at the centreline elevation). Open the 3D Terrain view once to unlock precise per-side volumes using the real fetched ground.';
+  renderCoverNote();
   refreshDesignOverlay3DIfOpen();
+}
+
+// Text companion to the chart's cover visuals - the chart shows WHERE the pipe is too shallow, this
+// says how short it falls and by how much, so a shortfall can't be missed just because the red stretch
+// is narrow at the current zoom.
+function renderCoverNote(){
+  const el = document.getElementById('coverCheckNote');
+  if(!el) return;
+  if(!profile || !designGrade){ el.textContent = ''; return; }
+  const cover = computeCoverCheck(profile);
+  const legend = document.getElementById('coverLegend');
+  if(legend) legend.style.display = cover ? '' : 'none';
+  if(!cover){
+    el.textContent = 'Pipe Ø 0 — treating the design grade as an open channel invert. Enter a pipe diameter to check minimum cover against the real ground.';
+    return;
+  }
+  const dia = Math.round(cover.od * 1000);
+  const head = 'Pipe Ø ' + dia + ' mm · crown at invert + ' + fmtElev(cover.od) + ' · min cover ' + fmtElev(cover.minC) + '. ';
+  const least = cover.worst ? 'Least cover ' + fmtElev(cover.worst.cover) + ' @ ' + fmtStation(cover.worst.dist) + '.' : '';
+  if(!cover.runs.length){
+    el.textContent = head + 'Cover met for the whole length. ' + least;
+    return;
+  }
+  // "STA 0+000–0+345", not "STA 0+000–STA 0+345" - the prefix belongs on the range, not both ends.
+  // The replace is a no-op in imperial, where fmtStation falls back to plain distances with no prefix.
+  const shown = cover.runs.slice(0, 3)
+    .map(r => fmtStation(r.from) + '–' + fmtStation(r.to).replace(/^STA /, '')).join(', ');
+  const more = cover.runs.length > 3 ? ' +' + (cover.runs.length - 3) + ' more' : '';
+  el.textContent = head + '⚠ Below minimum over ' + cover.runs.length +
+    (cover.runs.length === 1 ? ' stretch' : ' stretches') +
+    ' totalling ' + fmtDist(cover.totalShortfall) + ': ' + shown + more + '. ' + least;
 }
 function volumeStr(m3){
   const v = unitSystem === 'imperial' ? m3 * 35.3147 : m3;
@@ -5342,6 +5497,44 @@ function renderChartInto(prof, wrap, tooltip, expanded){
       band.setAttribute('stroke', 'none');
       svg.appendChild(band);
     });
+
+    // Minimum-cover visuals, when the design grade is being used as a pipe invert (Pipe Ø > 0).
+    // Drawn UNDER the design grade line below so the invert stays the most prominent thing on the
+    // chart - the pipe barrel and cover lines are context around it, not a replacement for it.
+    const cover = computeCoverCheck(prof);
+    if(cover){
+      const band = document.createElementNS(NS,'path');
+      band.setAttribute('d', pipeBandPath(xMinM, xMaxM, cover.od, X, Y));
+      band.setAttribute('fill', 'rgba(194,102,10,0.22)');
+      band.setAttribute('stroke', '#c2660a');
+      band.setAttribute('stroke-width', '1');
+      svg.appendChild(band);
+
+      // The ground elevation this design actually requires (crown + minimum cover). Where it pokes
+      // above the real ground line, the pipe is too shallow - that's the whole point of the line, so
+      // the violating stretches are re-drawn in red on top rather than left to be eyeballed.
+      if(cover.minC > 0){
+        const reqLine = document.createElementNS(NS,'path');
+        reqLine.setAttribute('d', designOffsetPath(xMinM, xMaxM, cover.od + cover.minC, X, Y));
+        reqLine.setAttribute('fill', 'none');
+        reqLine.setAttribute('stroke', '#6b7080');
+        reqLine.setAttribute('stroke-width', '1.5');
+        reqLine.setAttribute('stroke-dasharray', '2,4');
+        svg.appendChild(reqLine);
+
+        cover.runs.forEach(run => {
+          const from = Math.max(run.from, xMinM), to = Math.min(run.to, xMaxM);
+          if(to <= from) return;
+          const bad = document.createElementNS(NS,'path');
+          bad.setAttribute('d', designOffsetPath(from, to, cover.od + cover.minC, X, Y));
+          bad.setAttribute('fill', 'none');
+          bad.setAttribute('stroke', '#e0483e');
+          bad.setAttribute('stroke-width', '3');
+          bad.setAttribute('stroke-linecap', 'round');
+          svg.appendChild(bad);
+        });
+      }
+    }
 
     // The design grade line itself, bold and dashed to read clearly against the ground line.
     let gPath = '';
