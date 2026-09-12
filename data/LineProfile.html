@@ -714,15 +714,15 @@
         </button>
       </div>
       <div class="row" style="margin-top:10px;">
-        <select id="dxfZone" title="UTM zone to interpret the imported DXF file's coordinates in">
+        <select id="dxfZone" title="UTM zone for files that don't state their own coordinate system — DXF always, and a shapefile only when its .prj is missing. Ignored for GeoJSON/KML/KMZ, which are lat/lon by specification.">
           <option value="26917">UTM Zone 17N (NAD83)</option>
           <option value="26918">UTM Zone 18N (NAD83)</option>
         </select>
-        <button id="btnImportDxf">
+        <button id="btnImportDxf" title="GeoJSON, shapefile (.shp + .prj, or zipped), KML, KMZ, or DXF. The longest path in the file is used as the alignment.">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 4h11l5 5v11a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 4v6h6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 16l3-3 2 2 3-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Import Line from CAD (DXF)
+          Import Line (GeoJSON / SHP / KML / DXF)
         </button>
-        <input type="file" id="dxfFileInput" accept=".dxf" style="display:none;">
+        <input type="file" id="dxfFileInput" accept=".dxf,.geojson,.json,.kml,.kmz,.zip,.shp,.prj,.dbf,.shx" multiple style="display:none;">
       </div>
       <div class="row" style="margin-top:10px;">
         <button id="btnSaveProject" title="Save this line, profile, and design grade to a file you can reopen later" disabled>
@@ -1171,6 +1171,8 @@
 <script src="https://cdn.jsdelivr.net/npm/lerc@2.0.0/LercDecode.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
 <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<!-- Only used to unzip a zipped shapefile or a KMZ on import (both are just zip containers). -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
 'use strict';
 
@@ -2088,52 +2090,269 @@ function chainLineSegments(segs){
   return best;
 }
 
+// ---------- alignment import: GeoJSON / shapefile / KML / KMZ / DXF ----------
+// Every parser below returns candidate paths as arrays of {lat,lng} in WGS84, so the shared import
+// flow past this point is format-agnostic (one bounds check, one reset, one runProfile) rather than
+// each format carrying its own copy of that tail. DXF is the odd one out and always will be: it
+// stores bare drawing coordinates with NO coordinate system, which is the whole reason the UTM-zone
+// picker exists next to the button. GeoJSON and KML are lat/lon by specification, and a shapefile
+// normally ships a .prj that states its own CRS, so for those three the picker isn't consulted at all.
+
+// Longest wins, matching how the DXF path already picks between multiple polylines - a drawing or
+// shapefile usually holds more than just the alignment (property lines, labels, a boundary), and the
+// alignment is reliably the longest single path in the file. Real ground distance, not degrees, so a
+// north-south path isn't unfairly rated against an east-west one of the same true length.
+function latLngPathLength(pts){
+  let d = 0;
+  for(let i=1;i<pts.length;i++) d += haversine(pts[i-1].lat, pts[i-1].lng, pts[i].lat, pts[i].lng);
+  return d;
+}
+function pickLongestLatLngPath(paths){
+  const usable = paths.filter(p => p && p.length >= 2);
+  if(!usable.length) return null;
+  return usable.reduce((a,b) => latLngPathLength(b) > latLngPathLength(a) ? b : a);
+}
+
+// proj4 only has the four Ontario NAD83 zones registered up front (see the defs near the top). A
+// shapefile's .prj can legitimately name any UTM zone/datum, so register whatever it asks for on the
+// fly rather than failing on a file that's perfectly valid - all of these are plain UTM, differing
+// only in zone, datum and hemisphere.
+function ensureUtmDef(epsgCode){
+  const key = 'EPSG:' + epsgCode;
+  if(proj4.defs(key)) return key;
+  let zone = null, datum = 'WGS84', south = false;
+  if(epsgCode >= 26901 && epsgCode <= 26923){ zone = epsgCode - 26900; datum = 'NAD83'; }
+  else if(epsgCode >= 32601 && epsgCode <= 32660){ zone = epsgCode - 32600; }
+  else if(epsgCode >= 32701 && epsgCode <= 32760){ zone = epsgCode - 32700; south = true; }
+  if(zone == null) return null;
+  proj4.defs(key, '+proj=utm +zone=' + zone + ' +datum=' + datum + (south ? ' +south' : '') + ' +units=m +no_defs +type=crs');
+  return key;
+}
+
+// Reads a shapefile's sidecar .prj (OGC WKT) well enough to know what the coordinates mean. Only
+// three answers matter here: a geographic CRS (coordinates are already lat/lon), a UTM projection
+// (reprojectable), or unknown (fall back to the zone picker and let the Canada bounds check below
+// catch a wrong guess). Deliberately not a general WKT parser - that's a large job for no gain, since
+// anything outside these cases still degrades to the same honest "couldn't place this" error.
+function crsFromPrj(prjText){
+  if(!prjText) return { kind: 'unknown' };
+  const t = prjText.replace(/\s+/g, ' ');
+  if(!/PROJCS/i.test(t)) return { kind: 'geographic' }; // GEOGCS only - plain lat/lon
+  const auth = [...t.matchAll(/AUTHORITY\s*\[\s*"EPSG"\s*,\s*"(\d+)"\s*\]/gi)];
+  if(auth.length){
+    // The outermost (last) AUTHORITY in WKT is the CRS itself; earlier ones describe the datum,
+    // spheroid, primem etc. and would give the wrong code if taken first.
+    const code = parseInt(auth[auth.length-1][1], 10);
+    const key = ensureUtmDef(code);
+    if(key) return { kind: 'projected', epsg: key };
+  }
+  const utm = t.match(/UTM[_ ]?(?:zone[_ ]?)?(\d{1,2})\s*([NS])/i);
+  if(utm){
+    const zone = parseInt(utm[1], 10);
+    const north = utm[2].toUpperCase() === 'N';
+    const code = /NAD[_ ]?83/i.test(t) && north ? 26900 + zone : (north ? 32600 : 32700) + zone;
+    const key = ensureUtmDef(code);
+    if(key) return { kind: 'projected', epsg: key };
+  }
+  return { kind: 'unknown' };
+}
+
+// Shapefile .shp geometry reader. Only the XY of polyline/polygon records is read - no .dbf
+// attributes, no Z/M values - since all this needs from the file is the alignment's shape. Polygon
+// types are accepted too (a ring traced as a path) so a boundary handed over as a polygon still
+// imports instead of being rejected on a technicality.
+function parseShapefilePaths(buf){
+  const dv = new DataView(buf);
+  if(buf.byteLength < 100) throw new Error('this .shp file is too short to be valid');
+  if(dv.getInt32(0, false) !== 9994) throw new Error('this doesn\'t look like a .shp file (wrong file code)');
+  const POLY_TYPES = [3, 13, 23, 5, 15, 25]; // PolyLine/Z/M, Polygon/Z/M - same parts+points layout
+  const paths = [];
+  let off = 100; // past the 100-byte header
+  while(off + 8 <= buf.byteLength){
+    const contentLen = dv.getInt32(off + 4, false) * 2; // stored in 16-bit words
+    const contentStart = off + 8;
+    if(contentLen <= 0 || contentStart + contentLen > buf.byteLength) break;
+    if(POLY_TYPES.includes(dv.getInt32(contentStart, true))){
+      let p = contentStart + 4 + 32; // skip shape type + the record's own bbox (4 doubles)
+      const numParts = dv.getInt32(p, true); p += 4;
+      const numPoints = dv.getInt32(p, true); p += 4;
+      const partStarts = [];
+      for(let i=0;i<numParts;i++){ partStarts.push(dv.getInt32(p, true)); p += 4; }
+      const xy = [];
+      for(let i=0;i<numPoints;i++){ xy.push({ x: dv.getFloat64(p, true), y: dv.getFloat64(p+8, true) }); p += 16; }
+      for(let i=0;i<numParts;i++){
+        const part = xy.slice(partStarts[i], i+1 < numParts ? partStarts[i+1] : numPoints);
+        if(part.length >= 2) paths.push(part);
+      }
+    }
+    off = contentStart + contentLen;
+  }
+  if(!paths.length) throw new Error('no polyline or polygon shapes found in this shapefile');
+  return paths;
+}
+
+// GeoJSON is WGS84 lon/lat by specification (RFC 7946), so no projection step and no zone picker.
+// Walks the whole structure rather than assuming a FeatureCollection at the top, since a single
+// Feature or a bare geometry are both valid GeoJSON and both turn up in real exports.
+function parseGeoJSONPaths(text){
+  const data = JSON.parse(text);
+  // A saved Contour project is also a .json, so it's an easy thing to pick here by mistake - point at
+  // the right button instead of failing with a confusing "no geometry found".
+  if(data && data.contourProject) throw new Error('that\'s a saved Contour project, not a GeoJSON — use Open Project to reopen it');
+  const paths = [];
+  const addLine = (coords) => {
+    const pts = coords
+      .filter(c => Array.isArray(c) && isFinite(c[0]) && isFinite(c[1]))
+      .map(c => ({ lat: c[1], lng: c[0] }));
+    if(pts.length >= 2) paths.push(pts);
+  };
+  const walkGeom = (g) => {
+    if(!g || !g.type) return;
+    if(g.type === 'LineString') addLine(g.coordinates || []);
+    else if(g.type === 'MultiLineString') (g.coordinates || []).forEach(addLine);
+    else if(g.type === 'Polygon') (g.coordinates || []).forEach(addLine);
+    else if(g.type === 'MultiPolygon') (g.coordinates || []).forEach(rings => (rings || []).forEach(addLine));
+    else if(g.type === 'GeometryCollection') (g.geometries || []).forEach(walkGeom);
+  };
+  if(data.type === 'FeatureCollection') (data.features || []).forEach(f => walkGeom(f && f.geometry));
+  else if(data.type === 'Feature') walkGeom(data.geometry);
+  else walkGeom(data);
+  if(!paths.length) throw new Error('no LineString or Polygon geometry found in this GeoJSON');
+  return paths;
+}
+
+// KML coordinates are "lon,lat[,alt]" tuples separated by whitespace, and always WGS84 per the spec.
+// Pulled by tag name anywhere in the document so Folder/Document/Placemark/MultiGeometry nesting
+// doesn't matter, and LinearRing is accepted alongside LineString so a KML polygon still imports.
+function parseKMLPaths(text){
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if(doc.querySelector('parsererror')) throw new Error('this KML file could not be parsed as XML');
+  const paths = [];
+  ['LineString', 'LinearRing'].forEach(tag => {
+    Array.from(doc.getElementsByTagName(tag)).forEach(node => {
+      const raw = (node.getElementsByTagName('coordinates')[0] || {}).textContent || '';
+      const pts = raw.trim().split(/\s+/).map(tuple => {
+        const [lon, lat] = tuple.split(',').map(Number);
+        return isFinite(lat) && isFinite(lon) ? { lat, lng: lon } : null;
+      }).filter(Boolean);
+      if(pts.length >= 2) paths.push(pts);
+    });
+  });
+  if(!paths.length) throw new Error('no LineString or LinearRing geometry found in this KML');
+  return paths;
+}
+
+// Turns whatever the user picked into candidate WGS84 paths. Accepts several files at once purely so
+// a loose shapefile (.shp + .prj, which are always separate files) can be selected together - every
+// other format is self-contained in one file.
+async function readAlignmentPaths(files){
+  const byExt = {};
+  files.forEach(f => { byExt[(f.name.split('.').pop() || '').toLowerCase()] = f; });
+  const nameOf = (f) => f.name;
+
+  if(byExt.zip || byExt.kmz){
+    const container = byExt.zip || byExt.kmz;
+    const zip = await JSZip.loadAsync(await container.arrayBuffer());
+    const find = (re) => Object.keys(zip.files).find(n => re.test(n) && !zip.files[n].dir);
+    const kmlName = find(/\.kml$/i);
+    if(kmlName) return { paths: parseKMLPaths(await zip.file(kmlName).async('string')), crsNote: 'KML (WGS84)', source: nameOf(container) };
+    const shpName = find(/\.shp$/i);
+    if(shpName){
+      const prjName = find(/\.prj$/i);
+      const prjText = prjName ? await zip.file(prjName).async('string') : null;
+      return {
+        paths: projectShapefilePaths(parseShapefilePaths(await zip.file(shpName).async('arraybuffer')), crsFromPrj(prjText)),
+        crsNote: shapefileCrsNote(crsFromPrj(prjText)),
+        source: nameOf(container)
+      };
+    }
+    throw new Error('no .kml or .shp found inside this archive');
+  }
+  if(byExt.kml) return { paths: parseKMLPaths(await byExt.kml.text()), crsNote: 'KML (WGS84)', source: nameOf(byExt.kml) };
+  if(byExt.json || byExt.geojson){
+    const f = byExt.geojson || byExt.json;
+    return { paths: parseGeoJSONPaths(await f.text()), crsNote: 'GeoJSON (WGS84)', source: nameOf(f) };
+  }
+  if(byExt.shp){
+    const crs = crsFromPrj(byExt.prj ? await byExt.prj.text() : null);
+    return {
+      paths: projectShapefilePaths(parseShapefilePaths(await byExt.shp.arrayBuffer()), crs),
+      crsNote: shapefileCrsNote(crs),
+      source: nameOf(byExt.shp)
+    };
+  }
+  if(byExt.dxf){
+    const zoneEpsg = 'EPSG:' + document.getElementById('dxfZone').value;
+    const parsed = parseDXF(await byExt.dxf.text());
+    let bestPts = null;
+    if(parsed.polylines.length) bestPts = parsed.polylines.reduce((a,b) => polyLen2D(b) > polyLen2D(a) ? b : a);
+    else if(parsed.lineSegs.length) bestPts = chainLineSegments(parsed.lineSegs);
+    if(!bestPts || bestPts.length < 2){
+      throw new Error('No LWPOLYLINE or LINE entities found in this DXF (legacy POLYLINE/VERTEX entities aren\'t supported yet).');
+    }
+    return {
+      paths: [bestPts.map(p => { const [lon, lat] = proj4(zoneEpsg, 'WGS84', [p.x, p.y]); return { lat, lng: lon }; })],
+      crsNote: 'DXF read as ' + document.getElementById('dxfZone').selectedOptions[0].textContent,
+      source: nameOf(byExt.dxf)
+    };
+  }
+  throw new Error('unsupported file type — pick a .geojson, .shp (or zipped shapefile), .kml, .kmz, or .dxf');
+}
+
+// Shapefile XY -> WGS84 lat/lng. A geographic .prj means the coordinates already ARE lon/lat (x=lon,
+// y=lat, per the shapefile spec's axis order). Anything projected goes through proj4. With no .prj at
+// all there's nothing to go on, so it falls back to the zone picker - the same guess the DXF path has
+// always made, and the bounds check downstream still catches it if it's wrong.
+function projectShapefilePaths(paths, crs){
+  if(crs.kind === 'geographic') return paths.map(part => part.map(p => ({ lat: p.y, lng: p.x })));
+  const epsg = crs.kind === 'projected' ? crs.epsg : 'EPSG:' + document.getElementById('dxfZone').value;
+  return paths.map(part => part.map(p => {
+    const [lon, lat] = proj4(epsg, 'WGS84', [p.x, p.y]);
+    return { lat, lng: lon };
+  }));
+}
+function shapefileCrsNote(crs){
+  if(crs.kind === 'geographic') return 'shapefile (.prj says lat/lon)';
+  if(crs.kind === 'projected') return 'shapefile (.prj says ' + crs.epsg + ')';
+  return 'shapefile with no usable .prj — read as ' + document.getElementById('dxfZone').selectedOptions[0].textContent;
+}
+
 document.getElementById('btnImportDxf').addEventListener('click', () => {
   document.getElementById('dxfFileInput').click();
 });
 document.getElementById('dxfFileInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
+  const files = Array.from(e.target.files || []);
   e.target.value = '';
-  if(!file) return;
+  if(!files.length) return;
   if(reportGenerating){ showToast('A PDF report is still being built - wait for it to finish before importing a new line.'); return; }
   statusEl.className = '';
-  statusEl.innerHTML = 'Reading ' + file.name + '…';
+  statusEl.innerHTML = 'Reading ' + files.map(f => f.name).join(', ') + '…';
   try{
-    const text = await file.text();
-    const zoneEpsg = 'EPSG:' + document.getElementById('dxfZone').value;
-    const parsed = parseDXF(text);
-    let bestPts = null;
-    if(parsed.polylines.length){
-      bestPts = parsed.polylines.reduce((a,b) => polyLen2D(b) > polyLen2D(a) ? b : a);
-    } else if(parsed.lineSegs.length){
-      bestPts = chainLineSegments(parsed.lineSegs);
-    }
-    if(!bestPts || bestPts.length < 2){
-      throw new Error('No LWPOLYLINE or LINE entities found in this DXF (legacy POLYLINE/VERTEX entities aren\'t supported yet).');
-    }
+    const { paths, crsNote, source } = await readAlignmentPaths(files);
+    const converted = pickLongestLatLngPath(paths);
+    if(!converted) throw new Error('no path with at least two points was found in this file');
 
-    const converted = bestPts.map(p => {
-      const [lon, lat] = proj4(zoneEpsg, 'WGS84', [p.x, p.y]);
-      return { lat, lng: lon };
-    });
     // Written as "reject anything that ISN'T in bounds" rather than "reject anything out of bounds" -
-    // the original used < / > checks that are all false for a NaN coordinate (from a malformed DXF
-    // with a non-numeric ordinate), so .some() could return false and let NaN through. Inverting the
-    // in-bounds test means a NaN comparison correctly falls through to "not in bounds" instead.
+    // < / > checks are all false for a NaN coordinate (a malformed file with a non-numeric ordinate),
+    // so .some() could return false and let NaN through. Inverting the in-bounds test means a NaN
+    // comparison correctly falls through to "not in bounds" instead.
     const outOfCanada = converted.some(v => !(v.lat >= 40 && v.lat <= 85 && v.lng >= -145 && v.lng <= -50));
     if(outOfCanada){
-      throw new Error('Converted coordinates don\'t land in Canada — this DXF likely uses a local/arbitrary coordinate system rather than real-world UTM, or try the other zone.');
+      throw new Error('Converted coordinates don\'t land in Canada (read as ' + crsNote + ') — the file may use a local/arbitrary coordinate system rather than real-world coordinates, or need a different UTM zone.');
     }
 
     resetAll();
     vertices = converted;
     drawLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:PALETTE.drawLine, weight:3.5 }).addTo(map);
     map.fitBounds(drawLine.getBounds(), { padding:[50,50] });
-    statusEl.innerHTML = 'Imported ' + vertices.length + ' points from ' + file.name + '. Building profile…';
+    const others = paths.filter(p => p && p.length >= 2).length - 1;
+    statusEl.innerHTML = 'Imported ' + vertices.length + ' points from ' + escHtml(source) +
+      ' · ' + escHtml(crsNote) +
+      (others > 0 ? ' · longest of ' + (others+1) + ' paths in the file' : '') + '. Building profile…';
     await runProfile();
   } catch(err){
     statusEl.className = 'err';
-    statusEl.textContent = 'DXF import failed: ' + err.message;
+    statusEl.textContent = 'Import failed: ' + err.message;
   }
 });
 
