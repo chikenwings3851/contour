@@ -745,6 +745,29 @@
         </button>
         <input type="file" id="projectFileInput" accept=".json" style="display:none;">
       </div>
+      <div class="datum-note" style="margin:12px 0 6px;">Surveyed ditchline shots override LiDAR where it can't see the real bottom — through standing water, or soft/vegetated fill.</div>
+      <div class="row">
+        <button id="btnImportSurvey" title="CSV of survey shots — northing/easting (UTM) or lat/lon, plus elevation and a description code. Column roles are detected from the values.">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 19h16M7 16V9M12 16V5M17 16v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          Import Survey Shots (CSV)
+        </button>
+        <button id="btnClearSurvey" title="Drop the imported shots and go back to pure LiDAR ground" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          Clear Shots
+        </button>
+        <input type="file" id="surveyFileInput" accept=".csv,.txt" style="display:none;">
+      </div>
+      <div class="row" style="margin-top:8px;gap:8px;">
+        <div class="gp-field">
+          <label>Ditchline codes</label>
+          <input type="text" id="surveyCodes" value="INV,HB,DITCH,CL" placeholder="blank = use all shots">
+        </div>
+        <div class="gp-field">
+          <label>Max offset (m)</label>
+          <input type="number" id="surveyMaxOffset" step="0.5" min="0" value="5">
+        </div>
+      </div>
+      <div class="datum-note" id="surveyNote" style="margin:6px 0 0;"></div>
       <div id="status" style="margin-top:12px;">Click points on the map to trace a route, then Finish. Hovering the finished line tracks your position on the profile below.</div>
       <div id="progressBarWrap" style="display:none;">
         <div id="progressBarTrack"><div id="progressBarFill"></div></div>
@@ -2118,6 +2141,11 @@ async function runProfile(){
 // file (loadProject) - shared so the two paths can never drift apart from each other.
 function finalizeProfile(length, myRequestId, statusHtml){
   lastLength = length;
+  // Before anything reads `profile` - stats, chart, cut/fill, cross-sections, 3D, the report - swap in
+  // surveyed ground across whatever reach the shots cover. Everything downstream then works off the
+  // corrected ground with no further changes, and re-running this after a profile rebuild (an
+  // edit-handle drag refetches from scratch) keeps the override applied.
+  applySurveyOverride();
   const coords = vertices.map(v => [v.lat, v.lng]);
   if(!drawLine){
     drawLine = L.polyline(coords, { color: PALETTE.doneLine }).addTo(map);
@@ -2136,6 +2164,7 @@ function finalizeProfile(length, myRequestId, statusHtml){
   document.getElementById('emptyCard').style.display = 'none';
   renderStats(profile, length);
   refreshChart();
+  renderSurveyNote();
   document.getElementById('exportCard').style.display = '';
   document.getElementById('corridorViewCard').style.display = '';
   document.getElementById('gradeCard').style.display = '';
@@ -2205,6 +2234,199 @@ function nearestProfileIndex(lat, lon){
     if(d < best){ best = d; bestIdx = i; }
   }
   return bestIdx;
+}
+
+// ---------- survey shots: real ground where LiDAR can't see it ----------
+// LiDAR can't read through standing water (the return comes off the water surface) and in a soft or
+// vegetated ditch bottom the "ground" classification lands on top of the muck, not hard bottom. Both
+// make the invert read SHALLOWER than it really is, which is the one number a drain design can't have
+// wrong. Real surveyed ditchline shots override the LiDAR along the reach they cover; LiDAR carries
+// on everywhere else, and both lines stay visible on the profile so the difference is auditable.
+
+let surveyShots = [];        // every shot read from the file: {lat,lng,elev,desc}
+let surveyApplied = null;    // summary of the last override actually applied, for the UI/notes
+
+// Works out what each CSV column IS from the values themselves rather than trusting a header or a
+// fixed column order, because survey exports vary wildly (PNEZD, PENZD, lat/lon, header or not).
+// The ranges are Ontario-specific on purpose: UTM northings here are ~4.6-5.5M and eastings ~250-750k,
+// so the two can't be confused with each other or with an elevation, which is the usual way a
+// naively-parsed PNEZD file ends up silently transposed.
+function detectSurveyColumns(rows){
+  const colCount = Math.max(...rows.map(r => r.length));
+  const stats = [];
+  for(let c = 0; c < colCount; c++){
+    const raw = rows.map(r => (r[c] || '').trim());
+    const valid = raw.map(v => (v === '' || isNaN(Number(v))) ? null : Number(v)).filter(v => v != null);
+    const nonInt = valid.filter(v => !Number.isInteger(v)).length;
+    let ascending = true;
+    for(let i=1;i<valid.length;i++) if(valid[i] <= valid[i-1]){ ascending = false; break; }
+    stats.push({
+      c,
+      numericFrac: raw.length ? valid.length / raw.length : 0,
+      count: valid.length,
+      min: valid.length ? Math.min(...valid) : null,
+      max: valid.length ? Math.max(...valid) : null,
+      fracNonInt: valid.length ? nonInt / valid.length : 0,
+      ascending
+    });
+  }
+  const inRange = (s, lo, hi) => s.numericFrac > 0.9 && s.min != null && s.min >= lo && s.max <= hi;
+  const pick = (test) => { const s = stats.find(s => !s.used && test(s)); if(s) s.used = true; return s ? s.c : -1; };
+
+  const northing = pick(s => inRange(s, 4300000, 6000000));
+  const easting  = pick(s => inRange(s, 100000, 999999));
+  const lat      = northing >= 0 ? -1 : pick(s => inRange(s, 40, 85));
+  const lng      = easting  >= 0 ? -1 : pick(s => inRange(s, -145, -50));
+
+  // Elevation is picked last so it can't steal a coordinate column - but "numeric and in a plausible
+  // elevation range" alone is not enough, because a PNEZD file's leading POINT NUMBER column (1,2,3…)
+  // also satisfies that and sits to the LEFT, so a naive left-to-right scan grabs it and every
+  // elevation silently becomes a point number. Caught by a real test on a real PNEZD file. So: drop
+  // anything that looks like an ID sequence outright, then prefer a column sitting after the
+  // coordinates (survey formats put Z after N/E and the ID before) and one with actual decimal places
+  // (ground elevations have them; point numbers never do).
+  const looksLikeIdSequence = (s) =>
+    s.count > 2 && s.fracNonInt === 0 && s.ascending && Math.abs((s.max - s.min) - (s.count - 1)) <= 1;
+  const coordMax = Math.max(northing, easting, lat, lng);
+  const elevCandidates = stats
+    .filter(s => !s.used && inRange(s, -200, 2500) && !looksLikeIdSequence(s))
+    .sort((a, b) => {
+      const aAfter = a.c > coordMax ? 1 : 0, bAfter = b.c > coordMax ? 1 : 0;
+      if(aAfter !== bAfter) return bAfter - aAfter;
+      if(a.fracNonInt !== b.fracNonInt) return b.fracNonInt - a.fracNonInt;
+      return a.c - b.c;
+    });
+  let elev = -1;
+  if(elevCandidates.length){ elevCandidates[0].used = true; elev = elevCandidates[0].c; }
+
+  // Description is the least-numeric column that isn't already spoken for.
+  const descCand = stats.filter(s => !s.used).sort((a,b) => a.numericFrac - b.numericFrac)[0];
+  const desc = descCand && descCand.numericFrac < 0.5 ? descCand.c : -1;
+  return { northing, easting, lat, lng, elev, desc };
+}
+
+// CSV -> shots in WGS84. Handles a header row by simply skipping any row whose coordinate/elevation
+// cells aren't numeric, which also skips blank lines and trailing junk without special-casing them.
+function parseSurveyCSV(text, zoneEpsg){
+  const rows = text.split(/\r\n|\r|\n/).filter(l => l.trim() !== '')
+    .map(l => l.split(/[,;\t]/).map(c => c.trim().replace(/^"|"$/g, '')));
+  if(rows.length < 2) throw new Error('that file has no data rows');
+  const cols = detectSurveyColumns(rows);
+  const hasProjected = cols.northing >= 0 && cols.easting >= 0;
+  const hasGeographic = cols.lat >= 0 && cols.lng >= 0;
+  if(!hasProjected && !hasGeographic) throw new Error('could not find coordinate columns — expected northing/easting (UTM) or latitude/longitude');
+  if(cols.elev < 0) throw new Error('could not find an elevation column');
+
+  const shots = [];
+  rows.forEach(r => {
+    const num = (i) => (i >= 0 && r[i] != null && r[i] !== '' && !isNaN(Number(r[i]))) ? Number(r[i]) : null;
+    const elev = num(cols.elev);
+    if(elev == null) return; // header row or junk
+    let lat, lng;
+    if(hasProjected){
+      const n = num(cols.northing), e = num(cols.easting);
+      if(n == null || e == null) return;
+      [lng, lat] = proj4(zoneEpsg, 'WGS84', [e, n]);
+    } else {
+      lat = num(cols.lat); lng = num(cols.lng);
+      if(lat == null || lng == null) return;
+    }
+    shots.push({ lat, lng, elev, desc: (cols.desc >= 0 ? (r[cols.desc] || '') : '').trim() });
+  });
+  if(!shots.length) throw new Error('no usable rows found — check the coordinate and elevation columns');
+  return { shots, cols, projected: hasProjected };
+}
+
+// Which shots count as ditchline. Codes first (surveyors already tag invert shots, and that's the only
+// signal that reliably distinguishes an invert from a toe-of-slope shot at the same chainage), then a
+// corridor width, then - where several qualifying shots land at effectively the same station - the
+// LOWEST one, which is the invert more or less by definition.
+function selectDitchlineShots(shots, codesText, maxOffsetM){
+  const codes = (codesText || '').split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+  const byCode = codes.length
+    ? shots.filter(s => { const d = (s.desc || '').toUpperCase(); return codes.some(c => d.includes(c)); })
+    : shots.slice();
+  const near = [];
+  byCode.forEach(s => {
+    const idx = nearestProfileIndex(s.lat, s.lng);
+    const p = profile[idx];
+    const offset = haversine(s.lat, s.lng, p.lat, p.lon);
+    if(offset <= maxOffsetM) near.push({ ...s, station: p.dist, offset });
+  });
+  near.sort((a,b) => a.station - b.station);
+  // Collapse shots at effectively the same chainage, keeping the lowest.
+  const kept = [];
+  near.forEach(s => {
+    const last = kept[kept.length-1];
+    if(last && Math.abs(s.station - last.station) < 0.5){
+      if(s.elev < last.elev) kept[kept.length-1] = s;
+    } else kept.push(s);
+  });
+  return { kept, matchedCode: byCode.length };
+}
+
+// Replaces profile elevations with the surveyed ground across the reach the shots actually cover,
+// keeping the original LiDAR value on each point as `lidarElev` so both lines can be drawn and the
+// difference between them reported. Called from finalizeProfile, so it survives a profile rebuild
+// (an edit-handle drag re-fetches the whole profile from scratch).
+function applySurveyOverride(){
+  surveyApplied = null;
+  if(!profile || !profile.length) return;
+  // Always restore first - otherwise re-applying with different settings would stack corrections on
+  // top of an already-corrected profile instead of on the original LiDAR.
+  profile.forEach(p => { if(p.lidarElev !== undefined){ p.elev = p.lidarElev; delete p.lidarElev; } });
+  if(!surveyShots.length) return;
+
+  const maxOffset = parseFloat(document.getElementById('surveyMaxOffset').value) || 5;
+  const { kept } = selectDitchlineShots(surveyShots, document.getElementById('surveyCodes').value, maxOffset);
+  if(kept.length < 2){ surveyApplied = { kept: kept.length, tooFew: true }; return; }
+
+  const first = kept[0].station, last = kept[kept.length-1].station;
+  const surveyAt = (d) => {
+    if(d <= first) return kept[0].elev;
+    if(d >= last) return kept[kept.length-1].elev;
+    for(let i=1;i<kept.length;i++){
+      if(kept[i].station >= d){
+        const a = kept[i-1], b = kept[i];
+        const span = (b.station - a.station) || 1;
+        return a.elev + (b.elev - a.elev) * ((d - a.station) / span);
+      }
+    }
+    return kept[kept.length-1].elev;
+  };
+
+  let diffSum = 0, diffN = 0, replaced = 0;
+  profile.forEach(p => {
+    if(p.dist < first || p.dist > last) return;
+    const sv = surveyAt(p.dist);
+    if(p.elev != null){ diffSum += sv - p.elev; diffN++; }
+    p.lidarElev = p.elev;
+    p.elev = sv;
+    replaced++;
+  });
+  surveyApplied = {
+    kept: kept.length, replaced, from: first, to: last,
+    meanDiff: diffN ? diffSum / diffN : null,
+    shots: kept
+  };
+}
+
+function renderSurveyNote(){
+  const el = document.getElementById('surveyNote');
+  if(!el) return;
+  if(!surveyShots.length){ el.textContent = ''; return; }
+  const base = surveyShots.length + ' shots loaded. ';
+  if(!profile){ el.textContent = base + 'Draw or load a line to apply them.'; return; }
+  if(!surveyApplied || surveyApplied.tooFew){
+    el.textContent = base + 'No ditchline shots matched — widen the corridor, or clear/adjust the description codes.';
+    return;
+  }
+  const a = surveyApplied;
+  const diff = a.meanDiff == null ? '' :
+    ' Survey averages ' + fmtElev(Math.abs(a.meanDiff)) + (a.meanDiff < 0 ? ' BELOW' : ' ABOVE') +
+    ' LiDAR here — that\'s either water/soft bottom LiDAR couldn\'t see through, or a vertical datum mismatch. Check which before trusting it.';
+  el.textContent = base + 'Using ' + a.kept + ' along ' + fmtStation(a.from) + '–' + fmtStation(a.to).replace(/^STA /, '') +
+    ' (' + a.replaced + ' profile points overridden).' + diff;
 }
 
 // ---------- import line from CAD (DXF) ----------
@@ -2595,6 +2817,62 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
   }
 });
 
+document.getElementById('btnImportSurvey').addEventListener('click', () => {
+  document.getElementById('surveyFileInput').click();
+});
+document.getElementById('surveyFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  if(!profile){ showToast('Draw or load a line first — shots are matched against the alignment.'); return; }
+  statusEl.className = '';
+  statusEl.innerHTML = 'Reading ' + escHtml(file.name) + '…';
+  try{
+    const zoneEpsg = 'EPSG:' + document.getElementById('dxfZone').value;
+    const { shots, cols, projected } = parseSurveyCSV(await file.text(), zoneEpsg);
+    const outside = shots.filter(s => !(s.lat >= 40 && s.lat <= 85 && s.lng >= -145 && s.lng <= -50)).length;
+    if(outside === shots.length){
+      throw new Error('none of those shots land in Canada — check the UTM zone, or whether the file is on a local/assumed coordinate system');
+    }
+    surveyShots = shots;
+    document.getElementById('btnClearSurvey').disabled = false;
+    applySurveyOverride();
+    renderStats(profile, lastLength);
+    refreshChart();
+    renderSurveyNote();
+    if(designGrade) renderCutFillStats();
+    refreshXsCharts();
+    const detected = projected ? 'northing/easting read as ' + document.getElementById('dxfZone').selectedOptions[0].textContent
+                               : 'latitude/longitude';
+    statusEl.innerHTML = 'Loaded ' + shots.length + ' survey shots from ' + escHtml(file.name) +
+      ' · ' + detected + (cols.desc >= 0 ? ' · description column found' : ' · no description column') +
+      (outside ? ' · ' + outside + ' shots outside Canada ignored' : '') + '.';
+  } catch(err){
+    statusEl.className = 'err';
+    statusEl.textContent = 'Survey import failed: ' + err.message;
+  }
+});
+document.getElementById('btnClearSurvey').addEventListener('click', () => {
+  surveyShots = [];
+  document.getElementById('btnClearSurvey').disabled = true;
+  applySurveyOverride();
+  if(profile){ renderStats(profile, lastLength); refreshChart(); if(designGrade) renderCutFillStats(); refreshXsCharts(); }
+  renderSurveyNote();
+  statusEl.className = '';
+  statusEl.innerHTML = 'Survey shots cleared — back to LiDAR ground.';
+});
+['surveyCodes','surveyMaxOffset'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    if(!surveyShots.length || !profile) return;
+    applySurveyOverride();
+    renderStats(profile, lastLength);
+    refreshChart();
+    renderSurveyNote();
+    if(designGrade) renderCutFillStats();
+    refreshXsCharts();
+  });
+});
+
 // ---------- save / reopen project ----------
 // Persists everything needed to pick up exactly where you left off: the drawn line, the already-
 // fetched elevation profile (so reopening is instant - no re-fetch against the LiDAR service), and
@@ -2617,6 +2895,9 @@ document.getElementById('btnSaveProject').addEventListener('click', () => {
     sideSlope: currentSideSlope(),
     pipeDia: document.getElementById('pipeDia').value,
     minCover: document.getElementById('minCover').value,
+    surveyShots,
+    surveyCodes: document.getElementById('surveyCodes').value,
+    surveyMaxOffset: document.getElementById('surveyMaxOffset').value,
     unitSystem,
     veMode,
     mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() },
@@ -2667,6 +2948,12 @@ document.getElementById('projectFileInput').addEventListener('change', async (e)
     // (Ø 0 = open channel, so an older project reopens behaving exactly as it did when saved).
     document.getElementById('pipeDia').value = data.pipeDia != null ? data.pipeDia : '0';
     document.getElementById('minCover').value = data.minCover != null ? data.minCover : '0.6';
+    // A saved profile already has the override baked into its elev values (and lidarElev alongside),
+    // so restoring the shots here is what keeps the two lines - and any later re-filtering - working.
+    surveyShots = Array.isArray(data.surveyShots) ? data.surveyShots : [];
+    document.getElementById('btnClearSurvey').disabled = !surveyShots.length;
+    if(data.surveyCodes != null) document.getElementById('surveyCodes').value = data.surveyCodes;
+    if(data.surveyMaxOffset != null) document.getElementById('surveyMaxOffset').value = data.surveyMaxOffset;
     document.getElementById('prFirmName').value = data.prFirmName || '';
     document.getElementById('prFirmContact').value = data.prFirmContact || '';
     document.getElementById('prProjectTitle').value = data.prProjectTitle || '';
@@ -5273,6 +5560,14 @@ function computeChartYRange(prof, xMinM, xMaxM){
   // coordinates instead of a clean empty range.
   if(!elevsM.length) return { yMinM: 0, yMaxM: 1 };
   let realMin = Math.min(...elevsM), realMax = Math.max(...elevsM);
+  // The faint original-LiDAR line sits above the corrected ground wherever survey found a real bottom
+  // under water or muck - include it, or the very gap the comparison exists to show gets clipped off
+  // the top of the plot.
+  prof.forEach(p => {
+    if(p.lidarElev == null || p.dist < xMinM || p.dist > xMaxM) return;
+    if(p.lidarElev < realMin) realMin = p.lidarElev;
+    if(p.lidarElev > realMax) realMax = p.lidarElev;
+  });
   if(designGrade){
     designGrade.points.forEach(pt => { if(pt.elev < realMin) realMin = pt.elev; if(pt.elev > realMax) realMax = pt.elev; });
     [designElevAt(xMinM), designElevAt(xMaxM)].forEach(e => { if(e < realMin) realMin = e; if(e > realMax) realMax = e; });
@@ -5932,6 +6227,28 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   if(designGrade) area.setAttribute('fill-opacity', '0.35');
   svg.appendChild(area);
 
+  // Where survey shots have overridden the LiDAR, draw the ORIGINAL LiDAR line too, faint and dashed.
+  // The gap between the two is the whole point of having surveyed - it's the water/soft-bottom depth
+  // LiDAR couldn't see through - so it has to stay visible and auditable, not silently replaced.
+  if(prof.some(p => p.lidarElev !== undefined)){
+    let lPath = '', lOpen = false;
+    prof.forEach((p) => {
+      const e = p.lidarElev !== undefined ? p.lidarElev : p.elev;
+      if(e == null){ lOpen = false; return; }
+      const x = X(p.dist), y = Y(e);
+      lPath += (lOpen ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+      lOpen = true;
+    });
+    const lidarLine = document.createElementNS(NS,'path');
+    lidarLine.setAttribute('d', lPath);
+    lidarLine.setAttribute('fill', 'none');
+    lidarLine.setAttribute('stroke', PALETTE.accentDark);
+    lidarLine.setAttribute('stroke-opacity', '0.38');
+    lidarLine.setAttribute('stroke-width', expanded ? '1.75' : '1.5');
+    lidarLine.setAttribute('stroke-dasharray', '4,4');
+    svg.appendChild(lidarLine);
+  }
+
   const lineEl = document.createElementNS(NS,'path');
   lineEl.setAttribute('d', dPath);
   lineEl.setAttribute('fill', 'none');
@@ -5941,6 +6258,21 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   lineEl.setAttribute('stroke-linecap', 'round');
   lineEl.setAttribute('filter', 'url(#' + shadowId + ')');
   svg.appendChild(lineEl);
+
+  // The actual surveyed shots, so it's obvious which parts of the corrected ground are real readings
+  // and which are interpolation between them.
+  if(surveyApplied && surveyApplied.shots){
+    surveyApplied.shots.forEach(s => {
+      if(s.station < xMinM || s.station > xMaxM) return;
+      const dot = document.createElementNS(NS,'circle');
+      dot.setAttribute('cx', X(s.station)); dot.setAttribute('cy', Y(s.elev));
+      dot.setAttribute('r', expanded ? '3.5' : '3');
+      dot.setAttribute('fill', '#0d9f6e');
+      dot.setAttribute('stroke', '#fff');
+      dot.setAttribute('stroke-width', '1.2');
+      svg.appendChild(dot);
+    });
+  }
 
   if(designGrade){
     // Cut/fill shading: the band between ground and design, colored by which side is "up".
