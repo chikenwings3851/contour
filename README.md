@@ -12,9 +12,14 @@ No installation, no account, no build step. It's one HTML file that runs entirel
 
 ## Features
 
+**Getting a line in — four ways**
+- **Draw it** on the map
+- **Search a municipal drain by name** and load the drain itself as your alignment, straight from Ontario's open Constructed Drain data — no login or token. A named drain is stored as several separate reach features, so Contour groups them by name and stitches the reaches end-to-end into one continuous alignment
+- **Import a file** — GeoJSON, shapefile (`.shp`+`.prj`, or zipped), KML, KMZ, or DXF. GeoJSON/KML/KMZ are lat/lon by specification and a shapefile states its own CRS in its `.prj`, so only DXF needs you to pick a UTM zone
+- **Open a saved project** (`.json`)
+
 **Core**
-- Draw a route on the map (or import one from a DXF/CAD file) and get a real elevation profile in seconds
-- Aerial imagery basemap (Ontario Orthophotography) or a standard street map
+- Aerial imagery (Ontario Orthophotography) or Ontario's topographic basemap
 - Address search, metric/imperial toggle, CSV export, chart PNG export
 
 **Views — all can be open and tiled together**
@@ -24,8 +29,21 @@ No installation, no account, no build step. It's one HTML file that runs entirel
 
 **Design & analysis**
 - Design grade (cut/fill) against the real ground, multi-segment, with a true per-side "daylight search" (not a flat-ground guess) for accurate volumes and channel shapes
-- Manning's-style trapezoidal channel — bottom width and side slope, visualized in 2D, 3D, and cross-section together
+- Trapezoidal channel — bottom width and side slope, visualized in 2D, 3D, and cross-section together
+- **Minimum cover check** — for a design grade used as a pipe invert (a drain enclosure, culvert run, or tile main), set a pipe diameter and required cover and the profile draws the pipe barrel, the ground elevation your design actually requires, and highlights in red every stretch where the pipe sits too shallow for the ground above it
 - LiDAR survey coverage — see exactly which regional survey and vintage your data came from
+
+**Surveyed ground where LiDAR can't see it**
+
+LiDAR can't read through standing water — the return comes off the water surface — and in a soft or vegetated ditch bottom the ground classification lands on top of the muck rather than hard bottom. Both make an invert read *shallower* than it really is, which is the one number a drain design can't afford to have wrong.
+
+Import a CSV of survey shots (PNEZD, PENZD, or lat/lon, header or not — column roles are worked out from the values, so a northing can't be mistaken for an elevation) and the surveyed ditchline overrides the LiDAR across the reach it covers. Shots are filtered by description code (`INV`, `HB`, `DITCH`…), then by how far off the alignment they sit, then lowest-wins where several land at the same station — which is the invert more or less by definition.
+
+The original LiDAR line stays drawn underneath as a faint dashed line with your shots marked on it. That gap between the two lines is the water or soft-bottom depth, and it stays visible and auditable rather than being silently replaced. Everything downstream — cut/fill volumes, cross-sections, the 3D view, the PDF report — then works off the corrected ground.
+
+![Elevation profile with surveyed ditchline shots overriding LiDAR — the solid line is the corrected ground, the faint dashed line is what LiDAR reported, and the green dots are the real survey shots](docs/screenshot-survey.png)
+
+Contour also reports the mean difference between your shots and the LiDAR. That single number is deliberately ambiguous — it's either the water/soft bottom LiDAR couldn't see through, or a vertical datum mismatch — and it says so, leaving the call to you.
 
 **Export**
 - LiDAR corridor export as a georeferenced GeoTIFF
@@ -41,9 +59,11 @@ No installation, no account, no build step. It's one HTML file that runs entirel
 
 - **Ground elevation:** [Ontario LiDAR DTM](https://ws.geoservices.lrc.gov.on.ca/arcgis5/rest/services/Elevation/Ontario_DTM_LidarDerived/ImageServer) (Land Information Ontario) — Open Government Licence – Ontario
 - **Aerial imagery:** Ontario Orthophotography (LIO)
-- **Basemap / search:** OpenStreetMap contributors, Nominatim
+- **Topographic basemap:** [Ontario Topographic](https://ws.lioservices.lrc.gov.on.ca/arcgis1/rest/services/LIO_Cartographic/LIO_Topographic/MapServer) (LIO)
+- **Municipal drains:** [Constructed Drain](https://ws.lioservices.lrc.gov.on.ca/arcgis2/rest/services/LIO_OPEN_DATA/LIO_Open01/MapServer/7) (LIO open data — the no-token copy, not the licensed AgMaps service)
+- **Address search:** Nominatim / OpenStreetMap
 
-Full attribution and links live in the app itself, under **Sources & References**.
+Everything except the address search runs on Ontario's own public infrastructure — no API key, no token, nothing to expire. Full attribution and links live in the app itself, under **Sources & References**.
 
 ## Running it
 
@@ -55,7 +75,9 @@ git clone https://github.com/chikenwings3851/contour.git
 
 ## Status
 
-Actively developed, single-file architecture by design (no build tooling, no dependencies beyond a few CDN-loaded libraries: Leaflet, Three.js, proj4). Ontario-only, tied to the free public LiDAR/imagery coverage area.
+Actively developed, single-file architecture by design (no build tooling, no dependencies beyond a few CDN-loaded libraries: Leaflet, Three.js, proj4, JSZip). Ontario-only, tied to the free public LiDAR/imagery coverage area.
+
+Ground elevation is LiDAR-derived and not a legal survey — every PDF sheet says so, alongside its vertical datum and coordinate system.
 
 ---
 
