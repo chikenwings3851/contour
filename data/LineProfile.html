@@ -1064,8 +1064,8 @@
         <div class="source-item">
           <div class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M9 20l-6-2V4l6 2m0 14l6-2m-6 2V6m6 12l6 2V6l-6-2m0 16V4m0 2L9 4" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
           <div>
-            <div class="name">Street Map</div>
-            <div class="desc">© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors ↗</a></div>
+            <div class="name">Topographic Map</div>
+            <div class="desc">Ontario Topographic basemap, Land Information Ontario (LIO) — the same provincial infrastructure behind the aerial imagery and drain data, so it needs no token and carries no third-party rate limit. <a href="https://ws.lioservices.lrc.gov.on.ca/arcgis1/rest/services/LIO_Cartographic/LIO_Topographic/MapServer" target="_blank">View service ↗</a></div>
           </div>
         </div>
         <div class="source-item">
@@ -1370,9 +1370,22 @@ function splitPolylineIntoChunks(vertices, chunkCount){
 
 const map = L.map('map', { zoomControl: true, doubleClickZoom: true }).setView([44.389, -79.690], 12);
 
-const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+// Ontario's own topographic basemap, from the same LIO infrastructure this app already uses for the
+// aerial imagery and the drain data.
+//
+// This replaced OpenStreetMap's tile servers, which began returning HTTP 403 "Access blocked - App is
+// not following the tile usage policy" for this app. That policy exists to protect OSM's volunteer-run
+// servers and it's entirely fair: a single-file app opened straight off the filesystem sends no
+// identifying Referer, so there's no way for them to distinguish it from abuse. Worth knowing for any
+// future basemap work: OSM serves that refusal AS A VALID PNG, so the tile "loads" successfully and
+// Leaflet's tileerror never fires - the map fills with black-and-yellow "Access blocked" squares while
+// the app believes everything is fine. Don't rely on tileerror to catch it.
+//
+// Ontario's service is tile-cached in Web Mercator at zoom 0-19 (verified against the service's own
+// tileInfo), needs no token, and carries no third-party rate limit to fall foul of.
+const streetLayer = L.tileLayer('https://ws.lioservices.lrc.gov.on.ca/arcgis1/rest/services/LIO_Cartographic/LIO_Topographic/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 19,
-  attribution: '&copy; OpenStreetMap contributors'
+  attribution: 'Ontario Topographic (LIO)'
 });
 
 // Same Ontario orthophoto source (SWOOP/COOP via LIO) used in MaxDrainageMap.
@@ -1429,7 +1442,7 @@ function watchBasemapTiles(layer, key, label, otherKey, otherLayer, otherLabel){
     }
   });
 }
-watchBasemapTiles(streetLayer, 'street', 'Street map (OpenStreetMap)', 'aerial', aerialLayer, 'Aerial');
+watchBasemapTiles(streetLayer, 'street', 'Topographic map (Ontario LIO)', 'aerial', aerialLayer, 'Aerial');
 watchBasemapTiles(aerialLayer, 'aerial', 'Aerial imagery (Ontario LIO)', 'street', streetLayer, 'Street map');
 
 // ---------- search (with result pin) ----------
