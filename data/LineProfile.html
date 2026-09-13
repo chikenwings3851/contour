@@ -1382,11 +1382,13 @@ const aerialLayer = L.tileLayer(AERIAL_URL + '/tile/{z}/{y}/{x}', {
 }).addTo(map);
 
 document.getElementById('btnBaseStreet').addEventListener('click', () => {
+  basemapFailed.street = false; // explicit click = retry, even if it failed before
   map.removeLayer(aerialLayer);
   map.addLayer(streetLayer);
   setActiveBase('street');
 });
 document.getElementById('btnBaseAerial').addEventListener('click', () => {
+  basemapFailed.aerial = false;
   map.removeLayer(streetLayer);
   map.addLayer(aerialLayer);
   setActiveBase('aerial');
@@ -1395,6 +1397,40 @@ function setActiveBase(which){
   document.getElementById('btnBaseStreet').classList.toggle('ghost-active', which==='street');
   document.getElementById('btnBaseAerial').classList.toggle('ghost-active', which==='aerial');
 }
+
+// A tile server can be blocked by a corporate firewall or SSL inspection, rate-limited (OSM does this
+// to heavy anonymous use), or simply down. Leaflet's default response is to leave blank grey squares,
+// which from the user's side is indistinguishable from "the whole app is broken" - so say what
+// actually happened, and fall back to the other basemap so there's still a usable map underneath the
+// drawing tools. Only after several failures, since one dropped tile mid-pan is normal and harmless.
+const basemapFailed = { street: false, aerial: false };
+function watchBasemapTiles(layer, key, label, otherKey, otherLayer, otherLabel){
+  let errors = 0, decay = null;
+  layer.on('tileload', () => { errors = 0; });
+  layer.on('tileerror', () => {
+    if(basemapFailed[key]) return;
+    errors++;
+    clearTimeout(decay);
+    decay = setTimeout(() => { errors = 0; }, 10000);
+    if(errors < 4) return;
+    basemapFailed[key] = true;
+    // Don't bounce to a basemap that has already failed too - if both are unreachable this is a
+    // network problem, and ping-ponging between them would just hide that.
+    const canFall = !basemapFailed[otherKey] && map.hasLayer(layer);
+    statusEl.className = 'err';
+    statusEl.innerHTML = label + ' tiles could not be loaded — that server may be blocked on this network, ' +
+      'rate-limited, or temporarily down.' + (canFall ? ' Switched to ' + otherLabel + '.' : '') +
+      ' Everything else (elevation, drains, exports) uses different servers and is unaffected.';
+    showToast(label + ' tiles unavailable' + (canFall ? ' — switched to ' + otherLabel : ''));
+    if(canFall){
+      map.removeLayer(layer);
+      map.addLayer(otherLayer);
+      setActiveBase(otherKey);
+    }
+  });
+}
+watchBasemapTiles(streetLayer, 'street', 'Street map (OpenStreetMap)', 'aerial', aerialLayer, 'Aerial');
+watchBasemapTiles(aerialLayer, 'aerial', 'Aerial imagery (Ontario LIO)', 'street', streetLayer, 'Street map');
 
 // ---------- search (with result pin) ----------
 
@@ -1505,7 +1541,12 @@ searchBoxEl.addEventListener('keydown', async (e) => {
       statusEl.innerHTML = 'No results for "' + q.replace(/</g,'&lt;') + '".';
     }
   } catch(err){
-    statusEl.innerHTML = 'Search failed (offline?).';
+    // Same class of problem as the tile servers above: Nominatim is OpenStreetMap infrastructure and
+    // is a common thing for a corporate network to block, so name it rather than just "offline?".
+    statusEl.className = 'err';
+    statusEl.innerHTML = 'Address search failed — the OpenStreetMap search service (nominatim.openstreetmap.org) ' +
+      'could not be reached. It may be blocked on this network or rate-limited. Drain search and elevation data ' +
+      'use different servers and are unaffected.';
   }
 });
 document.addEventListener('click', (e) => {
