@@ -724,6 +724,16 @@
         </button>
         <input type="file" id="dxfFileInput" accept=".dxf,.geojson,.json,.kml,.kmz,.zip,.shp,.prj,.dbf,.shx" multiple style="display:none;">
       </div>
+      <div class="datum-note" style="margin:12px 0 6px;">Or load a municipal drain straight from Ontario's open Constructed Drain data — no login or token needed.</div>
+      <div class="search-wrap">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input type="text" id="drainSearchBox" placeholder="Search a drain by name…" autocomplete="off">
+        <div id="drainSearchResults" class="search-results" hidden></div>
+      </div>
+      <label class="datum-note" style="display:flex;align-items:center;gap:6px;margin:6px 0 0;cursor:pointer;">
+        <input type="checkbox" id="drainSearchThisView" checked style="width:auto;margin:0;">
+        Only search drains in the current map view (names repeat across Ontario)
+      </label>
       <div class="row" style="margin-top:10px;">
         <button id="btnSaveProject" title="Save this line, profile, and design grade to a file you can reopen later" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 14h8v6H8v-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
@@ -1476,7 +1486,187 @@ searchBoxEl.addEventListener('keydown', async (e) => {
   }
 });
 document.addEventListener('click', (e) => {
-  if(!e.target.closest('.search-wrap')) hideSearchResults();
+  if(!e.target.closest('.search-wrap')){ hideSearchResults(); hideDrainResults(); }
+});
+
+// ---------- drain search ----------
+// Ontario's "Constructed Drain" layer - drains built and maintained under the Drainage Act, i.e. the
+// exact thing this app exists to profile. Deliberately the OPEN LIO_OPEN_DATA copy on arcgis2, not the
+// token-gated AIA/AgMaps service that carries the same data: no login, no session key, nothing to
+// expire. Verified live against the service's own layer list and field list rather than assumed.
+const DRAIN_SEARCH_URL = 'https://ws.lioservices.lrc.gov.on.ca/arcgis2/rest/services/LIO_OPEN_DATA/LIO_Open01/MapServer/7';
+const drainSearchBoxEl = document.getElementById('drainSearchBox');
+const drainSearchResultsEl = document.getElementById('drainSearchResults');
+let drainResults = [], drainSearchDebounce = null, drainSearchRequestId = 0;
+
+function hideDrainResults(){
+  drainSearchResultsEl.hidden = true;
+  drainSearchResultsEl.innerHTML = '';
+  drainResults = [];
+}
+
+// A named drain is stored as SEVERAL polyline features (one per reach/branch), so results are grouped
+// by name - otherwise searching "Smith" lists the same drain a dozen times, once per reach.
+function groupDrainFeatures(features){
+  const byName = new Map();
+  features.forEach(f => {
+    const a = f.attributes || {};
+    const name = (a.OFFICIAL_NAME || '').trim();
+    if(!name) return;
+    if(!byName.has(name)) byName.set(name, { name, reaches: 0, status: a.LEGAL_STATUS, type: a.DRAIN_TYPE, dfo: a.DFO_CLASS });
+    const g = byName.get(name);
+    g.reaches++;
+    g.status = g.status || a.LEGAL_STATUS;
+    g.type = g.type || a.DRAIN_TYPE;
+    g.dfo = g.dfo || a.DFO_CLASS;
+  });
+  return [...byName.values()].sort((a,b) => a.name.localeCompare(b.name));
+}
+
+function drainQueryParams(q, withGeometry){
+  // Escaped for a SQL string literal - a drain name legitimately contains apostrophes ("O'Brien
+  // Drain"), and an unescaped one would both break the query and be an injection hole.
+  const safe = q.toUpperCase().replace(/'/g, "''");
+  const params = new URLSearchParams({
+    where: "UPPER(OFFICIAL_NAME) LIKE '%" + safe + "%'",
+    outFields: 'OFFICIAL_NAME,LEGAL_STATUS,DRAIN_TYPE,DFO_CLASS,DRAIN_REACH',
+    returnGeometry: withGeometry ? 'true' : 'false',
+    outSR: '4326',
+    f: 'json'
+  });
+  if(withGeometry) params.set('geometryPrecision', '6');
+  else params.set('resultRecordCount', '300');
+  if(document.getElementById('drainSearchThisView').checked){
+    const b = map.getBounds();
+    params.set('geometry', [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(','));
+    params.set('geometryType', 'esriGeometryEnvelope');
+    params.set('inSR', '4326');
+    params.set('spatialRel', 'esriSpatialRelIntersects');
+  }
+  return params;
+}
+
+function renderDrainResults(){
+  if(!drainResults.length){
+    drainSearchResultsEl.hidden = false;
+    drainSearchResultsEl.innerHTML = '<div class="search-result-item"><span class="sr-sub">No drains found' +
+      (document.getElementById('drainSearchThisView').checked ? ' in this map view — try unchecking the view filter, or pan to the right area.' : ' in Ontario.') + '</span></div>';
+    return;
+  }
+  drainSearchResultsEl.hidden = false;
+  drainSearchResultsEl.innerHTML = drainResults.map((r, i) => {
+    const bits = [r.status, r.type, r.dfo ? 'DFO ' + r.dfo : null,
+      r.reaches > 1 ? r.reaches + ' reaches' : null].filter(Boolean).join(' · ');
+    return '<div class="search-result-item" data-idx="' + i + '">' +
+      '<span class="sr-main">' + escHtml(r.name) + '</span>' +
+      (bits ? '<span class="sr-sub">' + escHtml(bits) + '</span>' : '') +
+    '</div>';
+  }).join('');
+  drainSearchResultsEl.querySelectorAll('.search-result-item[data-idx]').forEach(el => {
+    el.addEventListener('click', () => loadDrainAsAlignment(drainResults[parseInt(el.dataset.idx, 10)]));
+  });
+}
+
+// Stitches a drain's separate reach features into one continuous alignment: start from the longest
+// reach, then repeatedly attach whichever remaining reach touches either end (reversing it if needed).
+// Branches that don't connect are left out rather than jammed on, so the result is a real continuous
+// profile line instead of a path that teleports between branches.
+function chainDrainReaches(paths, tolM){
+  if(!paths.length) return [];
+  const remaining = paths.slice().sort((a,b) => latLngPathLength(b) - latLngPathLength(a));
+  let chain = remaining.shift();
+  const near = (a,b) => haversine(a.lat, a.lng, b.lat, b.lng) <= tolM;
+  let attached = true;
+  while(attached && remaining.length){
+    attached = false;
+    for(let i=0;i<remaining.length;i++){
+      const r = remaining[i];
+      const rs = r[0], re = r[r.length-1], cs = chain[0], ce = chain[chain.length-1];
+      if(near(ce, rs)) chain = chain.concat(r.slice(1));
+      else if(near(ce, re)) chain = chain.concat(r.slice(0, -1).reverse());
+      else if(near(cs, re)) chain = r.slice(0, -1).concat(chain);
+      else if(near(cs, rs)) chain = r.slice(1).reverse().concat(chain);
+      else continue;
+      remaining.splice(i, 1);
+      attached = true;
+      break;
+    }
+  }
+  return chain;
+}
+
+async function loadDrainAsAlignment(entry){
+  if(!entry) return;
+  if(reportGenerating){ showToast('A PDF report is still being built - wait for it to finish before loading a drain.'); return; }
+  hideDrainResults();
+  drainSearchBoxEl.value = entry.name;
+  statusEl.className = '';
+  statusEl.innerHTML = spinnerTag() + 'Loading ' + escHtml(entry.name) + '…';
+  try{
+    // Re-query by exact name (the list came from a LIKE search) so only this drain's reaches come back.
+    const params = drainQueryParams(entry.name, true);
+    params.set('where', "OFFICIAL_NAME = '" + entry.name.replace(/'/g, "''") + "'");
+    const res = await fetch(DRAIN_SEARCH_URL + '/query?' + params.toString(), { signal: AbortSignal.timeout(30000) });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error.message || 'the drain service rejected the request');
+    const paths = [];
+    (data.features || []).forEach(f => {
+      (f.geometry && f.geometry.paths || []).forEach(path => {
+        const pts = path.filter(c => isFinite(c[0]) && isFinite(c[1])).map(c => ({ lat: c[1], lng: c[0] }));
+        if(pts.length >= 2) paths.push(pts);
+      });
+    });
+    if(!paths.length) throw new Error('no geometry came back for that drain');
+
+    const chained = chainDrainReaches(paths, 5);
+    // LIO maps these at survey density - far finer than a profile alignment needs, and every vertex
+    // becomes a draggable edit handle. 1m is comfortably inside the LiDAR's own 0.5m grid, so this
+    // can't move the profile meaningfully; it just stops a long drain producing thousands of handles.
+    const simplified = simplifyLatLngPath(chained, 1);
+    resetAll();
+    vertices = simplified;
+    drawLine = L.polyline(vertices.map(v=>[v.lat,v.lng]), { color:PALETTE.drawLine, weight:3.5 }).addTo(map);
+    map.fitBounds(drawLine.getBounds(), { padding:[50,50] });
+    const used = countChainedReaches(paths, chained, 5);
+    statusEl.innerHTML = 'Loaded ' + escHtml(entry.name) + ' · ' + fmtDist(latLngPathLength(simplified)) +
+      ' · ' + vertices.length + ' points' +
+      (paths.length > 1 ? ' · ' + used + ' of ' + paths.length + ' reaches joined' : '') +
+      '. Building profile…';
+    await runProfile();
+  } catch(err){
+    statusEl.className = 'err';
+    statusEl.textContent = 'Could not load that drain: ' + err.message;
+  }
+}
+// How many of the original reaches actually made it into the chain - reported honestly, since a drain
+// with disconnected branches genuinely can't all become one continuous profile line.
+function countChainedReaches(paths, chain, tolM){
+  const inChain = (pt) => chain.some(c => haversine(c.lat, c.lng, pt.lat, pt.lng) <= tolM);
+  return paths.filter(p => inChain(p[0]) && inChain(p[p.length-1])).length;
+}
+
+drainSearchBoxEl.addEventListener('input', () => {
+  clearTimeout(drainSearchDebounce);
+  const q = drainSearchBoxEl.value.trim();
+  if(q.length < 3){ hideDrainResults(); return; }
+  drainSearchDebounce = setTimeout(async () => {
+    const myId = ++drainSearchRequestId;
+    try{
+      const res = await fetch(DRAIN_SEARCH_URL + '/query?' + drainQueryParams(q, false).toString(), { signal: AbortSignal.timeout(20000) });
+      const data = await res.json();
+      if(myId !== drainSearchRequestId) return; // a newer keystroke already superseded this one
+      if(data.error) throw new Error(data.error.message || 'query rejected');
+      drainResults = groupDrainFeatures(data.features || []);
+      renderDrainResults();
+    } catch(err){
+      if(myId !== drainSearchRequestId) return;
+      drainSearchResultsEl.hidden = false;
+      drainSearchResultsEl.innerHTML = '<div class="search-result-item"><span class="sr-sub">Drain search unavailable (' + escHtml(err.message) + ')</span></div>';
+    }
+  }, 350);
+});
+drainSearchBoxEl.addEventListener('keydown', (e) => {
+  if(e.key === 'Escape') hideDrainResults();
 });
 
 // ---------- keyboard shortcuts ----------
@@ -1611,8 +1801,15 @@ const vertexHandleIcon = L.divIcon({
   iconAnchor: [6,6]
 });
 
+// One draggable marker per vertex, which is fine for a hand-drawn line (a handful of clicks) but not
+// for an imported or queried alignment that can carry hundreds of vertices even after simplification -
+// past a few hundred markers the map turns sluggish and the handles overlap into an unusable smear.
+// The handles are an editing convenience, not the data, so they're skipped above the cap; the line,
+// profile, and everything downstream are unaffected.
+const MAX_EDIT_HANDLES = 300;
 function buildEditHandles(){
   clearEditHandles();
+  if(vertices.length > MAX_EDIT_HANDLES) return;
   editHandles = vertices.map((v, idx) => {
     const m = L.marker([v.lat, v.lng], { icon: vertexHandleIcon, draggable: true }).addTo(map);
     m.on('drag', (e) => {
@@ -2113,6 +2310,43 @@ function pickLongestLatLngPath(paths){
   return usable.reduce((a,b) => latLngPathLength(b) > latLngPathLength(a) ? b : a);
 }
 
+// Perpendicular distance from a point to a segment, in metres. A local flat-earth approximation is
+// used on purpose - over the span of one alignment segment the error is negligible, and it keeps this
+// cheap enough to run inside the simplifier's inner loop.
+function perpDistM(p, a, b){
+  const mPerDegLat = 111320, mPerDegLng = 111320 * Math.cos(a.lat * Math.PI/180);
+  const px = (p.lng - a.lng) * mPerDegLng, py = (p.lat - a.lat) * mPerDegLat;
+  const bx = (b.lng - a.lng) * mPerDegLng, by = (b.lat - a.lat) * mPerDegLat;
+  const len2 = bx*bx + by*by;
+  if(len2 === 0) return Math.hypot(px, py);
+  const t = Math.max(0, Math.min(1, (px*bx + py*by) / len2));
+  return Math.hypot(px - bx*t, py - by*t);
+}
+
+// Douglas-Peucker, in metres. Imported/queried geometry is often mapped far finer than a profile
+// alignment needs, and EVERY vertex becomes a draggable edit handle (see buildEditHandles) - a dense
+// line makes the map sluggish and the handles unusable. Iterative rather than recursive so a line with
+// tens of thousands of vertices can't blow the call stack.
+function simplifyLatLngPath(pts, tolM){
+  if(!pts || pts.length <= 2) return (pts || []).slice();
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = keep[pts.length-1] = true;
+  const stack = [[0, pts.length-1]];
+  while(stack.length){
+    const [s, e] = stack.pop();
+    let maxD = -1, idx = -1;
+    for(let i = s+1; i < e; i++){
+      const d = perpDistM(pts[i], pts[s], pts[e]);
+      if(d > maxD){ maxD = d; idx = i; }
+    }
+    if(maxD > tolM && idx > 0){
+      keep[idx] = true;
+      stack.push([s, idx], [idx, e]);
+    }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
 // proj4 only has the four Ontario NAD83 zones registered up front (see the defs near the top). A
 // shapefile's .prj can legitimately name any UTM zone/datum, so register whatever it asks for on the
 // fly rather than failing on a file that's perfectly valid - all of these are plain UTM, differing
@@ -2329,8 +2563,12 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
   statusEl.innerHTML = 'Reading ' + files.map(f => f.name).join(', ') + '…';
   try{
     const { paths, crsNote, source } = await readAlignmentPaths(files);
-    const converted = pickLongestLatLngPath(paths);
-    if(!converted) throw new Error('no path with at least two points was found in this file');
+    const rawPath = pickLongestLatLngPath(paths);
+    if(!rawPath) throw new Error('no path with at least two points was found in this file');
+    // Same reasoning as the drain loader: a surveyed/GIS alignment can carry far more vertices than a
+    // profile needs, and each one becomes a draggable edit handle. 1m is well inside the LiDAR's own
+    // 0.5m grid, so this can't move the profile meaningfully.
+    const converted = simplifyLatLngPath(rawPath, 1);
 
     // Written as "reject anything that ISN'T in bounds" rather than "reject anything out of bounds" -
     // < / > checks are all false for a NaN coordinate (a malformed file with a non-numeric ordinate),
@@ -2348,6 +2586,7 @@ document.getElementById('dxfFileInput').addEventListener('change', async (e) => 
     const others = paths.filter(p => p && p.length >= 2).length - 1;
     statusEl.innerHTML = 'Imported ' + vertices.length + ' points from ' + escHtml(source) +
       ' · ' + escHtml(crsNote) +
+      (rawPath.length > vertices.length ? ' · simplified from ' + rawPath.length : '') +
       (others > 0 ? ' · longest of ' + (others+1) + ' paths in the file' : '') + '. Building profile…';
     await runProfile();
   } catch(err){
