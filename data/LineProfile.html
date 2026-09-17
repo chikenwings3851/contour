@@ -453,11 +453,29 @@
     align-items:center;justify-content:center;
     padding:20px;
   }
+  /* A step with a live target dims the page itself via .tutorial-highlight's box-shadow instead -
+     otherwise the flat background here would sit on top of the cutout and dim it too. */
+  .tutorial-overlay.spotlight{ background:transparent; }
+  .tutorial-highlight{
+    position:fixed;display:none;
+    border-radius:10px;
+    box-shadow:0 0 0 3000px rgba(20,20,30,0.55), 0 0 0 3px var(--accent), 0 0 22px rgba(91,91,240,.6);
+    transition:left .22s ease, top .22s ease, width .22s ease, height .22s ease;
+    pointer-events:none;
+  }
   .tutorial-panel{
     position:relative;width:min(440px,92vw);
     background:var(--surface);border-radius:16px;box-shadow:var(--shadow-lg);
     border:1px solid var(--border);padding:32px 28px 22px;
+    transition:left .22s ease, top .22s ease;
   }
+  /* Points from the panel back at whichever real control tutorialHighlight is lit up around - a
+     plain CSS border-triangle, positioned/rotated per side by positionTutorial(). */
+  .tutorial-caret{ position:absolute; width:0; height:0; display:none; }
+  .tutorial-caret.pos-right{ border:9px solid transparent; border-right-color:var(--surface); left:-18px; }
+  .tutorial-caret.pos-left{ border:9px solid transparent; border-left-color:var(--surface); right:-18px; }
+  .tutorial-caret.pos-bottom{ border:9px solid transparent; border-bottom-color:var(--surface); top:-18px; }
+  .tutorial-caret.pos-top{ border:9px solid transparent; border-top-color:var(--surface); bottom:-18px; }
   .tutorial-skip{
     position:absolute;top:16px;right:16px;background:none;border:none;
     font-size:12.5px;font-weight:600;color:var(--text-faint);cursor:pointer;padding:4px 6px;
@@ -673,7 +691,13 @@
      conventionally focused/modal, whereas the utility panels (shortcuts, 3D, Cross Section, the
      expanded chart) deliberately stay non-blocking so the map stays usable underneath them. -->
 <div class="tutorial-overlay" id="tutorialOverlay">
+  <!-- Spotlight cutout for whichever real control the current step is about - see positionTutorial().
+       Its huge box-shadow does the actual dimming when a step has a live target, so the overlay's
+       own flat background is switched off (via the .spotlight class) to avoid double-dimming the
+       one area meant to stay lit. -->
+  <div class="tutorial-highlight" id="tutorialHighlight"></div>
   <div class="tutorial-panel">
+    <div class="tutorial-caret" id="tutorialCaret"></div>
     <button id="btnTutorialSkip" class="tutorial-skip">Skip</button>
     <div id="tutorialStepBody"></div>
     <div class="tutorial-footer">
@@ -1783,6 +1807,10 @@ document.getElementById('btnCloseShortcuts').addEventListener('click', closeShor
 // every feature. The advanced stuff (3D, Cross Section, Design Grade) gets one line as
 // "optional, explore later", not an explanation each - the empty-state cards already carry
 // their own reasoning once you get there.
+// Each step can name a `target` - a CSS selector, or a function returning one (for a control that
+// only exists/shows once a profile does) - to spotlight the real element it's talking about,
+// resolved fresh every time by resolveTutorialTarget() rather than assumed fixed. A step with no
+// target (or whose target isn't currently visible) falls back to the plain centered panel.
 const TUTORIAL_STEPS = [
   {
     icon: '<path d="M12 3L2 8l10 5 8-4v6" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><path d="M6 10.5V15c0 1.5 2.7 3 6 3s6-1.5 6-3v-4.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -1792,30 +1820,137 @@ const TUTORIAL_STEPS = [
   {
     icon: '<circle cx="11" cy="11" r="7" stroke="#fff" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="#fff" stroke-width="2" stroke-linecap="round"/>',
     title: '1. Find your spot',
-    body: 'Type an address into the search box at the top of the page, or just click and drag the map — the same way you would in Google Maps.'
+    body: 'Type an address into this search box, or just click and drag the map — the same way you would in Google Maps.',
+    target: '#searchBox'
   },
   {
     icon: '<path d="M4 20l3-1 11-11-2-2L5 17l-1 3z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>',
     title: '2. Draw a line',
-    body: 'Click the purple <b>Draw Line</b> button, then click a few points on the map to trace your route. When you\'re done, click <b>Finish</b> — or just double-click your last point.'
+    body: 'Click this purple <b>Draw Line</b> button, then click a few points on the map to trace your route. When you\'re done, click <b>Finish</b> — or just double-click your last point.',
+    target: '#btnDraw'
   },
   {
     icon: '<path d="M3 17l5-7 4 4 5-8 4 5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
     title: '3. See your results',
-    body: 'That\'s it! A chart appears on the right showing the ground elevation along your line — how high and low it is, from start to end.'
+    body: 'That\'s it! A chart appears right here showing the ground elevation along your line — how high and low it is, from start to end. Click anywhere on it afterward to pin the exact elevation at that point.',
+    target: () => (isTutorialTargetVisible('#chartCard') ? '#chartCard' : '#emptyCard')
   },
   {
     icon: '<path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>',
     title: 'Want to go further?',
-    body: 'Once you have a line, you can also see it in 3D, look at a slice sideways across it, or plan out a cut-and-fill design. These are all optional extras in the panel on the right — feel free to just stick with the basics for now.'
+    body: 'Once you have a line, you can also see it in 3D, look at a slice sideways across it, or plan out a cut-and-fill design. These are all optional extras in the sidebar — feel free to just stick with the basics for now.',
+    target: () => (isTutorialTargetVisible('#corridorViewCard') ? '#corridorViewCard' : null)
   },
   {
     icon: '<path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
     title: 'You\'re ready!',
-    body: 'That covers the basics. If you ever get stuck, look for the <b>?</b> button in the top-right corner for keyboard shortcuts, or the button right next to it to see this tutorial again.'
+    body: 'That covers the basics. If you ever get stuck, look for this <b>?</b> button for keyboard shortcuts, or the one right next to it to see this tutorial again.',
+    target: '#btnShortcuts'
   }
 ];
 let tutorialStep = 0;
+let tutorialScrollSettleTimer = null;
+function isTutorialTargetVisible(sel){
+  const el = document.querySelector(sel);
+  if(!el) return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+// Resolves a step's `target` (string selector, selector-returning function, or absent) down to a
+// real, currently-visible element - or null, which is the fallback-to-centered-panel signal.
+function resolveTutorialTarget(step){
+  let sel = step.target;
+  if(typeof sel === 'function') sel = sel();
+  if(!sel) return null;
+  const el = document.querySelector(sel);
+  if(!el) return null;
+  const r = el.getBoundingClientRect();
+  return (r.width > 0 && r.height > 0) ? el : null;
+}
+// Spotlights the current step's target (if any) and moves the panel to sit next to it, with a
+// caret pointing back at it. No target (or one that's not visible right now, e.g. a sidebar card
+// that only appears once a profile exists) falls back to the original dimmed-and-centered look.
+function positionTutorial(){
+  const overlay = document.getElementById('tutorialOverlay');
+  const panel = document.querySelector('.tutorial-panel');
+  const highlight = document.getElementById('tutorialHighlight');
+  const caret = document.getElementById('tutorialCaret');
+  const target = resolveTutorialTarget(TUTORIAL_STEPS[tutorialStep]);
+
+  if(!target){
+    overlay.classList.remove('spotlight');
+    highlight.style.display = 'none';
+    caret.style.display = 'none';
+    panel.style.position = '';
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.margin = '';
+    return;
+  }
+
+  // A target that exists but sits scrolled out of view in the sidebar (a card further down than
+  // whatever's currently scrolled into view) needs scrolling into view first -
+  // getBoundingClientRect() right after scrollIntoView({behavior:'smooth'}) still reports the
+  // PRE-scroll position, so this bails and lets the scroll's own settle timer finish the job.
+  // The previous step's highlight/caret are explicitly cleared here (not just left alone) - without
+  // this, they stayed frozen over the OLD target's position for the whole ~340ms scroll, a visible
+  // glitch caught by testing a fast Next-click through the tour rather than stepping through slowly.
+  const rCheck = target.getBoundingClientRect();
+  if(rCheck.top < 0 || rCheck.bottom > window.innerHeight){
+    overlay.classList.remove('spotlight');
+    highlight.style.display = 'none';
+    caret.style.display = 'none';
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    clearTimeout(tutorialScrollSettleTimer);
+    tutorialScrollSettleTimer = setTimeout(() => {
+      if(document.getElementById('tutorialOverlay').style.display === 'flex') positionTutorial();
+    }, 340);
+    return;
+  }
+
+  overlay.classList.add('spotlight');
+  const r = rCheck;
+  const hp = 8; // highlight padding around the real element
+  highlight.style.display = 'block';
+  highlight.style.left = (r.left - hp) + 'px';
+  highlight.style.top = (r.top - hp) + 'px';
+  highlight.style.width = (r.width + hp*2) + 'px';
+  highlight.style.height = (r.height + hp*2) + 'px';
+
+  const vw = window.innerWidth, vh = window.innerHeight, margin = 16;
+  const pw = panel.offsetWidth, ph = panel.offsetHeight;
+  // Prefer beside the target (right, then left) since that's usually where the sidebar/toolbar
+  // has room; fall back to above/below for a target near the left or right edge.
+  let placement;
+  if(vw - r.right >= pw + margin*2) placement = 'right';
+  else if(r.left >= pw + margin*2) placement = 'left';
+  else if(vh - r.bottom >= ph + margin*2) placement = 'bottom';
+  else if(r.top >= ph + margin*2) placement = 'top';
+  else placement = 'bottom';
+
+  let left, top;
+  if(placement === 'right'){ left = r.right + margin; top = r.top + r.height/2 - ph/2; }
+  else if(placement === 'left'){ left = r.left - margin - pw; top = r.top + r.height/2 - ph/2; }
+  else if(placement === 'bottom'){ left = r.left + r.width/2 - pw/2; top = r.bottom + margin; }
+  else { left = r.left + r.width/2 - pw/2; top = r.top - margin - ph; }
+  left = Math.max(12, Math.min(left, vw - pw - 12));
+  top = Math.max(12, Math.min(top, vh - ph - 12));
+
+  panel.style.position = 'fixed';
+  panel.style.margin = '0';
+  panel.style.left = left + 'px';
+  panel.style.top = top + 'px';
+
+  caret.className = 'tutorial-caret pos-' + placement;
+  caret.style.display = 'block';
+  if(placement === 'right' || placement === 'left'){
+    caret.style.left = '';
+    caret.style.top = Math.max(16, Math.min(r.top + r.height/2 - top, ph - 16)) + 'px';
+  } else {
+    caret.style.top = '';
+    caret.style.left = Math.max(16, Math.min(r.left + r.width/2 - left, pw - 16)) + 'px';
+  }
+}
 function renderTutorialStep(){
   const s = TUTORIAL_STEPS[tutorialStep];
   document.getElementById('tutorialStepBody').innerHTML =
@@ -1825,15 +1960,23 @@ function renderTutorialStep(){
     '<span class="tutorial-dot' + (i === tutorialStep ? ' active' : '') + '"></span>').join('');
   document.getElementById('btnTutorialBack').disabled = tutorialStep === 0;
   document.getElementById('btnTutorialNext').textContent = tutorialStep === TUTORIAL_STEPS.length - 1 ? 'Got it' : 'Next';
+  positionTutorial();
 }
 function openTutorial(){
   tutorialStep = 0;
-  renderTutorialStep();
   document.getElementById('tutorialOverlay').style.display = 'flex';
+  renderTutorialStep();
 }
 function closeTutorial(){
+  clearTimeout(tutorialScrollSettleTimer);
   document.getElementById('tutorialOverlay').style.display = 'none';
+  document.getElementById('tutorialOverlay').classList.remove('spotlight');
+  const panel = document.querySelector('.tutorial-panel');
+  panel.style.position = ''; panel.style.left = ''; panel.style.top = ''; panel.style.margin = '';
 }
+window.addEventListener('resize', () => {
+  if(document.getElementById('tutorialOverlay').style.display === 'flex') positionTutorial();
+});
 document.getElementById('btnTutorialNext').addEventListener('click', () => {
   if(tutorialStep >= TUTORIAL_STEPS.length - 1){ closeTutorial(); return; }
   tutorialStep++;
