@@ -81,12 +81,32 @@
     display:flex;
     min-height:0;
   }
-  #map{
+  #mapWrap{
     flex:1;
     min-width:0;
+    position:relative;
+  }
+  #map{
+    position:absolute;
+    inset:0;
     cursor:crosshair;
     background:#eef0f6;
   }
+  #mapToolbar{
+    position:absolute;
+    left:50%;
+    bottom:26px;
+    transform:translateX(-50%);
+    z-index:1000;
+    display:flex;
+    gap:8px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:100px;
+    padding:8px;
+    box-shadow:var(--shadow-lg);
+  }
+  #mapToolbar button{border-radius:100px;}
   #sidebar{
     width:440px;
     flex:none;
@@ -671,7 +691,27 @@
 <div id="printReport"></div>
 
 <div id="main">
-  <div id="map"></div>
+  <div id="mapWrap">
+    <div id="map"></div>
+    <div id="mapToolbar">
+      <button id="btnDraw" class="primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 20l3-1 11-11-2-2L5 17l-1 3z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        Draw Line
+      </button>
+      <button id="btnUndo" disabled>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Undo
+      </button>
+      <button id="btnFinish" disabled>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Finish
+      </button>
+      <button id="btnClear" class="danger">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        Clear
+      </button>
+    </div>
+  </div>
   <div id="sidebar">
 
     <div class="card">
@@ -694,26 +734,8 @@
     </div>
 
     <div class="card">
-      <h2>Draw a Route</h2>
+      <h2>Import &amp; Save</h2>
       <div class="row">
-        <button id="btnDraw" class="primary">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 20l3-1 11-11-2-2L5 17l-1 3z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>
-          Draw Line
-        </button>
-        <button id="btnUndo" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Undo
-        </button>
-        <button id="btnFinish" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Finish
-        </button>
-        <button id="btnClear" class="danger">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          Clear
-        </button>
-      </div>
-      <div class="row" style="margin-top:10px;">
         <select id="dxfZone" title="UTM zone for files that don't state their own coordinate system — DXF always, and a shapefile only when its .prj is missing. Ignored for GeoJSON/KML/KMZ, which are lat/lon by specification.">
           <option value="26917">UTM Zone 17N (NAD83)</option>
           <option value="26918">UTM Zone 18N (NAD83)</option>
