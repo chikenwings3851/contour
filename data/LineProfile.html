@@ -99,14 +99,22 @@
     transform:translateX(-50%);
     z-index:1000;
     display:flex;
-    gap:8px;
-    background:var(--surface);
+    align-items:center;
+    gap:6px;
+    background:rgba(255,255,255,0.92);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
     border:1px solid var(--border);
     border-radius:100px;
-    padding:8px;
+    padding:7px;
     box-shadow:var(--shadow-lg);
+    animation:mapToolbarIn .35s cubic-bezier(.2,.8,.2,1);
   }
-  #mapToolbar button{border-radius:100px;}
+  @keyframes mapToolbarIn{ from{ opacity:0; transform:translate(-50%, 14px); } to{ opacity:1; transform:translate(-50%, 0); } }
+  #mapToolbar button{border-radius:100px;padding:10px 16px;}
+  /* Draw Line is the mode toggle; Undo/Finish/Clear act on the line already in progress - a thin
+     divider separates the two groups instead of one undifferentiated row of four buttons. */
+  #mapToolbar .toolbar-div{width:1px;height:22px;background:var(--border-strong);flex:none;margin:0 2px;}
   #sidebar{
     width:440px;
     flex:none;
@@ -125,6 +133,15 @@
     padding:16px 17px;
     box-shadow:var(--shadow-sm);
   }
+  /* Breaks a dense card (Import & Save bundles four fairly unrelated actions) into labeled
+     sub-groups without a full collapsible-card rewrite - a lighter echo of .card h2's own
+     uppercase caption style, one step down in the hierarchy, with a divider above every group
+     but the first (which already follows directly under the card's own title). */
+  .subsection-label{
+    font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;
+    color:var(--text-faint);margin:14px 0 9px;padding-top:14px;border-top:1px solid var(--border);
+  }
+  .subsection-label:first-of-type{ margin-top:0; padding-top:0; border-top:none; }
   .card h2{
     font-size:11.5px;
     text-transform:uppercase;
@@ -459,9 +476,13 @@
   .tutorial-highlight{
     position:fixed;display:none;
     border-radius:10px;
-    box-shadow:0 0 0 3000px rgba(20,20,30,0.55), 0 0 0 3px var(--accent), 0 0 22px rgba(91,91,240,.6);
+    animation:tutorialPulse 1.8s ease-in-out infinite;
     transition:left .22s ease, top .22s ease, width .22s ease, height .22s ease;
     pointer-events:none;
+  }
+  @keyframes tutorialPulse{
+    0%,100%{ box-shadow:0 0 0 3000px rgba(20,20,30,0.55), 0 0 0 3px var(--accent), 0 0 20px rgba(91,91,240,.55); }
+    50%{ box-shadow:0 0 0 3000px rgba(20,20,30,0.55), 0 0 0 3px var(--accent), 0 0 32px rgba(91,91,240,.85); }
   }
   .tutorial-panel{
     position:relative;width:min(440px,92vw);
@@ -470,12 +491,14 @@
     transition:left .22s ease, top .22s ease;
   }
   /* Points from the panel back at whichever real control tutorialHighlight is lit up around - a
-     plain CSS border-triangle, positioned/rotated per side by positionTutorial(). */
-  .tutorial-caret{ position:absolute; width:0; height:0; display:none; }
+     plain CSS border-triangle, positioned/rotated per side by positionTutorial(). The drop-shadow
+     gives it the same subtle lift as the panel itself instead of looking like a flat cutout. */
+  .tutorial-caret{ position:absolute; width:0; height:0; display:none; filter:drop-shadow(0 2px 3px rgba(20,22,40,.18)); }
   .tutorial-caret.pos-right{ border:9px solid transparent; border-right-color:var(--surface); left:-18px; }
   .tutorial-caret.pos-left{ border:9px solid transparent; border-left-color:var(--surface); right:-18px; }
   .tutorial-caret.pos-bottom{ border:9px solid transparent; border-bottom-color:var(--surface); top:-18px; }
   .tutorial-caret.pos-top{ border:9px solid transparent; border-top-color:var(--surface); bottom:-18px; }
+  #tutorialStepBody{ transition:opacity .12s ease; }
   .tutorial-skip{
     position:absolute;top:16px;right:16px;background:none;border:none;
     font-size:12.5px;font-weight:600;color:var(--text-faint);cursor:pointer;padding:4px 6px;
@@ -722,6 +745,7 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 20l3-1 11-11-2-2L5 17l-1 3z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>
         Draw Line
       </button>
+      <div class="toolbar-div"></div>
       <button id="btnUndo" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Undo
@@ -759,6 +783,7 @@
 
     <div class="card">
       <h2>Import &amp; Save</h2>
+      <div class="subsection-label">Import a Line</div>
       <div class="row">
         <select id="dxfZone" title="UTM zone for files that don't state their own coordinate system — DXF always, and a shapefile only when its .prj is missing. Ignored for GeoJSON/KML/KMZ, which are lat/lon by specification.">
           <option value="26917">UTM Zone 17N (NAD83)</option>
@@ -770,7 +795,8 @@
         </button>
         <input type="file" id="dxfFileInput" accept=".dxf,.geojson,.json,.kml,.kmz,.zip,.shp,.prj,.dbf,.shx" multiple style="display:none;">
       </div>
-      <div class="datum-note" style="margin:12px 0 6px;">Or load a municipal drain straight from Ontario's open Constructed Drain data — no login or token needed.</div>
+      <div class="subsection-label">Municipal Drains</div>
+      <div class="datum-note" style="margin:0 0 6px;">Load a municipal drain straight from Ontario's open Constructed Drain data — no login or token needed.</div>
       <div class="search-wrap">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <input type="text" id="drainSearchBox" placeholder="Search a drain by name…" autocomplete="off">
@@ -780,7 +806,8 @@
         <input type="checkbox" id="drainSearchThisView" checked style="width:auto;margin:0;">
         Only search drains in the current map view (names repeat across Ontario)
       </label>
-      <div class="row" style="margin-top:10px;">
+      <div class="subsection-label">Project File</div>
+      <div class="row">
         <button id="btnSaveProject" title="Save this line, profile, and design grade to a file you can reopen later" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 14h8v6H8v-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
           Save Project
@@ -791,7 +818,8 @@
         </button>
         <input type="file" id="projectFileInput" accept=".json" style="display:none;">
       </div>
-      <div class="datum-note" style="margin:12px 0 6px;">Surveyed ditchline shots override LiDAR where it can't see the real bottom — through standing water, or soft/vegetated fill.</div>
+      <div class="subsection-label">Survey Shots</div>
+      <div class="datum-note" style="margin:0 0 6px;">Surveyed ditchline shots override LiDAR where it can't see the real bottom — through standing water, or soft/vegetated fill.</div>
       <div class="row">
         <button id="btnImportSurvey" title="CSV of survey shots — northing/easting (UTM) or lat/lon, plus elevation and a description code. Column roles are detected from the values.">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 19h16M7 16V9M12 16V5M17 16v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -1951,16 +1979,27 @@ function positionTutorial(){
     caret.style.left = Math.max(16, Math.min(r.left + r.width/2 - left, pw - 16)) + 'px';
   }
 }
+let tutorialFadeTimer = null;
 function renderTutorialStep(){
   const s = TUTORIAL_STEPS[tutorialStep];
-  document.getElementById('tutorialStepBody').innerHTML =
-    '<div class="tutorial-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none">' + s.icon + '</svg></div>' +
-    '<h3>' + s.title + '</h3><p>' + s.body + '</p>';
   document.getElementById('tutorialDots').innerHTML = TUTORIAL_STEPS.map((_, i) =>
     '<span class="tutorial-dot' + (i === tutorialStep ? ' active' : '') + '"></span>').join('');
   document.getElementById('btnTutorialBack').disabled = tutorialStep === 0;
   document.getElementById('btnTutorialNext').textContent = tutorialStep === TUTORIAL_STEPS.length - 1 ? 'Got it' : 'Next';
-  positionTutorial();
+  // A quick crossfade instead of an abrupt content swap - the actual innerHTML update (and the
+  // positionTutorial() call, which measures the panel's real size) both happen after the fade-out,
+  // since positioning against the OLD content's size would be stale.
+  const body = document.getElementById('tutorialStepBody');
+  body.style.opacity = '0';
+  clearTimeout(tutorialFadeTimer);
+  tutorialFadeTimer = setTimeout(() => {
+    if(document.getElementById('tutorialOverlay').style.display !== 'flex') return;
+    body.innerHTML =
+      '<div class="tutorial-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none">' + s.icon + '</svg></div>' +
+      '<h3>' + s.title + '</h3><p>' + s.body + '</p>';
+    body.style.opacity = '1';
+    positionTutorial();
+  }, 110);
 }
 function openTutorial(){
   tutorialStep = 0;
@@ -1969,6 +2008,7 @@ function openTutorial(){
 }
 function closeTutorial(){
   clearTimeout(tutorialScrollSettleTimer);
+  clearTimeout(tutorialFadeTimer);
   document.getElementById('tutorialOverlay').style.display = 'none';
   document.getElementById('tutorialOverlay').classList.remove('spotlight');
   const panel = document.querySelector('.tutorial-panel');
