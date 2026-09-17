@@ -23,7 +23,7 @@ No installation, no account, no build step. It's one HTML file that runs entirel
 - Address search, metric/imperial toggle, CSV export, chart PNG export
 
 **Views — all can be open and tiled together**
-- **Elevation Profile** — the main chart, with scroll-to-zoom, drag-to-pan, and a measuring tool
+- **Elevation Profile** — the main chart, with scroll-to-zoom, drag-to-pan, click-to-pin the exact station/elevation at any point, and a measuring tool
 - **3D Terrain** — full native-resolution (no downsampling) terrain around your corridor, Google Earth-style navigation, draped aerial imagery
 - **Cross Section** — a real perpendicular slice across the line at any station, with a live draggable slider on the map and a "jump to station" input (plain metres or `0+150` chainage notation)
 
