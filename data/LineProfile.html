@@ -2022,6 +2022,7 @@ function resetAll(){
   chartXView = null;
   chartMeasure = null;
   chartMeasureMode = false;
+  chartPin = null;
   document.querySelectorAll('.measure-toggle').forEach(b => b.classList.remove('ghost-active'));
   closeModal();
   closeView3D();
@@ -2190,6 +2191,7 @@ async function runProfile(){
 
     chartXView = null;
     chartMeasure = null;
+    chartPin = null;
     let cum = 0, prev = null;
     profile = allPoints.map(s => {
       if(prev) cum += haversine(prev.lat, prev.lon, s.lat, s.lon);
@@ -5588,6 +5590,11 @@ document.addEventListener('mouseup', () => { chartPanState = null; });
 // chartMeasure is null (nothing placed), { a } (first point placed, waiting for the second), or
 // { a, b } (a completed measurement, shown until cleared or superseded by a fresh first click).
 let chartMeasureMode = false, chartMeasure = null;
+// A plain click on the profile (outside Measure mode) drops this pin - the exact station/elevation
+// at the nearest real sample, shown until superseded by the next click. Distinct from the hover
+// tooltip (which vanishes the instant the mouse leaves) and from the Measure tool (which needs a
+// mode toggle and two points) - this is just "what's the number right here", one click, no setup.
+let chartPin = null;
 document.querySelectorAll('.measure-toggle').forEach(btn => {
   btn.addEventListener('click', (e) => {
     chartMeasureMode = !chartMeasureMode;
@@ -6531,6 +6538,54 @@ function renderChartInto(prof, wrap, tooltip, expanded){
     }
   }
 
+  // Click-to-pin: the exact station/elevation at whatever point was last clicked (see chartPin
+  // above), shown until superseded by the next click or cleared with the line. Rendered as real
+  // SVG, same as the Measure tool's markers, so it survives "Save Chart PNG" too.
+  if(chartPin && chartPin.dist >= xMinM && chartPin.dist <= xMaxM){
+    const pinColor = '#f59e0b';
+    const px = X(chartPin.dist), py = Y(chartPin.elev);
+    const pinTick = document.createElementNS(NS,'line');
+    pinTick.setAttribute('x1', px); pinTick.setAttribute('x2', px);
+    pinTick.setAttribute('y1', pad.t); pinTick.setAttribute('y2', h - pad.b);
+    pinTick.setAttribute('stroke', pinColor); pinTick.setAttribute('stroke-width', '1.5');
+    pinTick.setAttribute('stroke-dasharray', '2,4'); pinTick.setAttribute('opacity', '0.65');
+    svg.appendChild(pinTick);
+    const pinDot = document.createElementNS(NS,'circle');
+    pinDot.setAttribute('cx', px); pinDot.setAttribute('cy', py);
+    pinDot.setAttribute('r', expanded ? '6' : '5');
+    pinDot.setAttribute('fill', pinColor); pinDot.setAttribute('stroke', '#fff'); pinDot.setAttribute('stroke-width', '2');
+    svg.appendChild(pinDot);
+
+    const pinLines = [fmtStation(chartPin.dist), fmtElev(chartPin.elev)];
+    if(designGrade){
+      const design = designElevAt(chartPin.dist);
+      const diff = chartPin.elev - design;
+      const kind = diff >= 0 ? 'cut' : 'fill';
+      pinLines.push(kind + ' ' + fmtElev(Math.abs(diff)) + ' vs design');
+    }
+    const pinLineH = expanded ? 15 : 13;
+    const pinBoxW = 126, pinBoxH = pinLines.length*pinLineH + 10;
+    const pinBoxX = Math.min(Math.max(px - pinBoxW/2, pad.l+2), w - pad.r - pinBoxW - 2);
+    // Prefer a label above the point; flip below when there's no room (a point near the top edge).
+    let pinBoxY = py - pinBoxH - 14;
+    if(pinBoxY < pad.t + 2) pinBoxY = Math.min(py + 14, h - pad.b - pinBoxH - 2);
+    const pinBox = document.createElementNS(NS,'rect');
+    pinBox.setAttribute('x', pinBoxX); pinBox.setAttribute('y', pinBoxY);
+    pinBox.setAttribute('width', pinBoxW); pinBox.setAttribute('height', pinBoxH);
+    pinBox.setAttribute('rx', '7'); pinBox.setAttribute('fill', PALETTE.text); pinBox.setAttribute('fill-opacity', '0.94');
+    svg.appendChild(pinBox);
+    const pinLineColors = ['#fff', pinColor];
+    pinLines.forEach((ln, i) => {
+      const t = document.createElementNS(NS,'text');
+      t.setAttribute('x', pinBoxX + pinBoxW/2); t.setAttribute('y', pinBoxY + 16 + i*pinLineH);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-family', 'JetBrains Mono, monospace');
+      t.setAttribute('font-size', i===0 ? '11' : '10.5'); t.setAttribute('font-weight', i===0 ? '700' : '600');
+      t.setAttribute('fill', pinLineColors[i] || '#c7ccdb');
+      t.textContent = ln;
+      svg.appendChild(t);
+    });
+  }
+
   const dot = document.createElementNS(NS,'circle');
   dot.setAttribute('r', expanded ? '5' : '4'); dot.setAttribute('fill','#ffffff');
   dot.setAttribute('stroke', PALETTE.accentDark); dot.setAttribute('stroke-width','2.5');
@@ -6588,13 +6643,14 @@ function renderChartInto(prof, wrap, tooltip, expanded){
   });
   svg.addEventListener('dblclick', () => { if(!chartMeasureMode){ chartXView = null; refreshChart(); } });
 
-  // Click either places the next Measure-tool point (if that's armed), or otherwise jumps the
-  // Cross Section to whatever station was clicked - real browser 'click' semantics already only
-  // fire on a genuine stationary click, not a pan-drag, so this needs no separate threshold check
-  // of its own. Both branches share the same nearest-real-sample lookup (real ground samples only,
-  // snapped to the nearest actual profile sample so the numbers reflect real data, not an
+  // Click either places the next Measure-tool point (if that's armed), or otherwise drops the
+  // click-to-pin marker (exact station/elevation, see chartPin above) and, if cross-sections are
+  // loaded, also jumps the Cross Section to that station - real browser 'click' semantics already
+  // only fire on a genuine stationary click, not a pan-drag, so this needs no separate threshold
+  // check of its own. All branches share the same nearest-real-sample lookup (real ground samples
+  // only, snapped to the nearest actual profile sample so the numbers reflect real data, not an
   // arbitrary pixel). A completed a+b measurement is superseded by starting fresh on the next
-  // click rather than requiring an explicit clear.
+  // click rather than requiring an explicit clear; the pin works the same way.
   svg.addEventListener('click', (ev) => {
     const rect = svg.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
@@ -6614,8 +6670,10 @@ function renderChartInto(prof, wrap, tooltip, expanded){
         chartMeasure.b = { dist: p.dist, elev: p.elev };
       }
       refreshChart();
-    } else if(xsStations.length){
-      loadCrossSection(p.dist);
+    } else {
+      chartPin = { dist: p.dist, elev: p.elev };
+      if(xsStations.length) loadCrossSection(p.dist);
+      else refreshChart();
     }
   });
 
