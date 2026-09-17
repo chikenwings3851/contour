@@ -142,6 +142,10 @@
     color:var(--text-faint);margin:14px 0 9px;padding-top:14px;border-top:1px solid var(--border);
   }
   .subsection-label:first-of-type{ margin-top:0; padding-top:0; border-top:none; }
+  /* Same "no divider on the first group" rule, but for when a .card-head sits before it (as in the
+     now-collapsible Import & Save card) - that card-head, not the label, becomes the first div
+     sibling, so :first-of-type above no longer matches it. */
+  .card-head + .subsection-label{ margin-top:0; padding-top:0; border-top:none; }
   .card h2{
     font-size:11.5px;
     text-transform:uppercase;
@@ -781,8 +785,11 @@
       </div>
     </div>
 
-    <div class="card">
-      <h2>Import &amp; Save</h2>
+    <div class="card collapsed" id="importSaveCard">
+      <div class="card-head collapsible">
+        <h2>Import &amp; Save</h2>
+        <svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
       <div class="subsection-label">Import a Line</div>
       <div class="row">
         <select id="dxfZone" title="UTM zone for files that don't state their own coordinate system — DXF always, and a shapefile only when its .prj is missing. Ignored for GeoJSON/KML/KMZ, which are lat/lon by specification.">
