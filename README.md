@@ -39,6 +39,8 @@ LiDAR can't read through standing water — the return comes off the water surfa
 
 Import a CSV of survey shots (PNEZD, PENZD, or lat/lon, header or not — column roles are worked out from the values, so a northing can't be mistaken for an elevation) and the surveyed ditchline overrides the LiDAR across the reach it covers. Shots are filtered by description code (`INV`, `HB`, `DITCH`…), then by how far off the alignment they sit, then lowest-wins where several land at the same station — which is the invert more or less by definition.
 
+Or import the ditchline straight from CAD — a real 3D polyline, LWPOLYLINE, or LINE chain — instead of a CSV. Each vertex's real drawn elevation becomes a shot; since the whole line was drawn specifically as the invert, it always counts as ditchline regardless of the description-code filter above.
+
 The original LiDAR line stays drawn underneath as a faint dashed line with your shots marked on it. That gap between the two lines is the water or soft-bottom depth, and it stays visible and auditable rather than being silently replaced. Everything downstream — cut/fill volumes, cross-sections, the 3D view, the PDF report — then works off the corrected ground.
 
 ![Elevation profile with surveyed ditchline shots overriding LiDAR — the solid line is the corrected ground, the faint dashed line is what LiDAR reported, and the green dots are the real survey shots](docs/screenshot-survey.png)
