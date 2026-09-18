@@ -1465,7 +1465,7 @@ function splitPolylineIntoChunks(vertices, chunkCount){
 
 // ---------- map setup ----------
 
-const map = L.map('map', { zoomControl: true, doubleClickZoom: true }).setView([44.389, -79.690], 12);
+const map = L.map('map', { zoomControl: true, doubleClickZoom: true, maxZoom: 22 }).setView([44.389, -79.690], 12);
 
 // Ontario's own topographic basemap, from the same LIO infrastructure this app already uses for the
 // aerial imagery and the drain data.
@@ -1478,16 +1478,25 @@ const map = L.map('map', { zoomControl: true, doubleClickZoom: true }).setView([
 // Leaflet's tileerror never fires - the map fills with black-and-yellow "Access blocked" squares while
 // the app believes everything is fine. Don't rely on tileerror to catch it.
 //
-// Ontario's service is tile-cached in Web Mercator at zoom 0-19 (verified against the service's own
-// tileInfo), needs no token, and carries no third-party rate limit to fall foul of.
+// The service's own tileInfo LOD list goes to 19 (this layer) / 23 (aerial below), but that's just the
+// theoretical tiling scheme - the REAL cached tiles run out well before that everywhere actually
+// checked (Barrie/Toronto/Ottawa/Guelph): 17 here, confirmed by real tile requests, not just reading
+// the LOD list length. maxZoom lets the Leaflet UI zoom in further than that anyway (useful for
+// placing a line precisely against visible features); maxNativeZoom stops it from actually
+// REQUESTING tiles past the real cutoff (which would just 404 and show blank squares) and instead
+// upscales the deepest real tile to fill the closer view - blurrier past 17, but never blank.
 const streetLayer = L.tileLayer('https://ws.lioservices.lrc.gov.on.ca/arcgis1/rest/services/LIO_Cartographic/LIO_Topographic/MapServer/tile/{z}/{y}/{x}', {
-  maxZoom: 19,
+  maxZoom: 22,
+  maxNativeZoom: 17,
   attribution: 'Ontario Topographic (LIO)'
 });
 
-// Same Ontario orthophoto source (SWOOP/COOP via LIO) used in MaxDrainageMap.
+// Same Ontario orthophoto source (SWOOP/COOP via LIO) used in MaxDrainageMap. Real cached tiles run
+// out at 19 (same "checked, not assumed" basis as streetLayer above) - maxNativeZoom stops actual
+// tile requests there and lets Leaflet upscale for closer zoom instead of 404ing into blank tiles.
 const aerialLayer = L.tileLayer(AERIAL_URL + '/tile/{z}/{y}/{x}', {
-  maxZoom: 19,
+  maxZoom: 22,
+  maxNativeZoom: 19,
   attribution: 'Ontario Imagery (LIO)'
 }).addTo(map);
 
