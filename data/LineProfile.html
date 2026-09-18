@@ -5240,6 +5240,10 @@ makeDraggable(document.querySelector('.grade-panel'), document.getElementById('g
 let xsOpen = false, xsStations = [];
 let xsCurrentStationDist = null, xsStationMapMarker = null; // "which cross-section am I on" highlight, shown on both the map and the elevation chart
 let lastXsPoints = null; // cached from the last successful fetch, so a manual panel resize can redraw at the new width without re-hitting the (known-flaky) DTM server
+// Click-to-pin on the Cross Section chart, same idea as the Elevation Profile's chartPin: a plain
+// click drops a persistent marker with the exact offset/elevation at that point, until superseded
+// by the next click or the station changes. {offset, elev} or null.
+let xsChartPin = null;
 
 document.getElementById('btnCrossSection3d').addEventListener('click', () => openCrossSectionModal());
 document.getElementById('btnCloseXs').addEventListener('click', () => closeCrossSectionModal());
@@ -5523,6 +5527,7 @@ async function loadCrossSection(stationDist){
   // a station whose chart never rendered.
   const prevStationDist = xsCurrentStationDist;
   xsCurrentStationDist = stationDist;
+  xsChartPin = null; // a pinned offset/elevation belongs to the station being left, not the new one
   updateXsHighlight();
   syncXsSelects(stationDist);
   const fetchingHtml = spinnerTag() + 'Fetching cross-section at ' + fmtStation(stationDist) + '…';
@@ -5749,6 +5754,57 @@ function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
   dot.style.display = 'none';
   svg.appendChild(dot);
 
+  // Click-to-pin: the exact offset/elevation at whatever point was last clicked on THIS station's
+  // section (see xsChartPin above), shown until superseded by the next click or the station
+  // changes. Same amber styling and SVG-based approach as the Elevation Profile's own pin, for
+  // visual consistency between the two charts.
+  if(xsChartPin){
+    const near = xsPoints.reduce((best, p) => {
+      if(p.elev == null) return best;
+      const diff = Math.abs(p.offset - xsChartPin.offset);
+      return (!best || diff < best.diff) ? { p, diff } : best;
+    }, null);
+    if(near){
+      const pinColor = '#f59e0b';
+      const px = X(near.p.offset), py = Y(near.p.elev);
+      const pinTick = document.createElementNS(NS,'line');
+      pinTick.setAttribute('x1', px); pinTick.setAttribute('x2', px);
+      pinTick.setAttribute('y1', pad.t); pinTick.setAttribute('y2', h - pad.b);
+      pinTick.setAttribute('stroke', pinColor); pinTick.setAttribute('stroke-width', '1.5');
+      pinTick.setAttribute('stroke-dasharray', '2,4'); pinTick.setAttribute('opacity', '0.65');
+      svg.appendChild(pinTick);
+      const pinDot = document.createElementNS(NS,'circle');
+      pinDot.setAttribute('cx', px); pinDot.setAttribute('cy', py); pinDot.setAttribute('r', '5');
+      pinDot.setAttribute('fill', pinColor); pinDot.setAttribute('stroke', '#fff'); pinDot.setAttribute('stroke-width', '2');
+      svg.appendChild(pinDot);
+
+      const pinLines = [
+        fmtDist(Math.abs(near.p.offset)) + (near.p.offset < 0 ? ' L' : (near.p.offset > 0 ? ' R' : ' (centre)')),
+        fmtElev(near.p.elev)
+      ];
+      const pinLineH = 13;
+      const pinBoxW = 106, pinBoxH = pinLines.length*pinLineH + 10;
+      const pinBoxX = Math.min(Math.max(px - pinBoxW/2, pad.l+2), w - pad.r - pinBoxW - 2);
+      let pinBoxY = py - pinBoxH - 14;
+      if(pinBoxY < pad.t + 2) pinBoxY = Math.min(py + 14, h - pad.b - pinBoxH - 2);
+      const pinBox = document.createElementNS(NS,'rect');
+      pinBox.setAttribute('x', pinBoxX); pinBox.setAttribute('y', pinBoxY);
+      pinBox.setAttribute('width', pinBoxW); pinBox.setAttribute('height', pinBoxH);
+      pinBox.setAttribute('rx', '7'); pinBox.setAttribute('fill', PALETTE.text); pinBox.setAttribute('fill-opacity', '0.94');
+      svg.appendChild(pinBox);
+      const pinLineColors = ['#fff', pinColor];
+      pinLines.forEach((ln, i) => {
+        const t = document.createElementNS(NS,'text');
+        t.setAttribute('x', pinBoxX + pinBoxW/2); t.setAttribute('y', pinBoxY + 16 + i*pinLineH);
+        t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-family', 'JetBrains Mono, monospace');
+        t.setAttribute('font-size', i===0 ? '11' : '10.5'); t.setAttribute('font-weight', i===0 ? '700' : '600');
+        t.setAttribute('fill', pinLineColors[i]);
+        t.textContent = ln;
+        svg.appendChild(t);
+      });
+    }
+  }
+
   // Hovering here moves ACROSS the alignment (offset), not along it - the station these charts
   // are showing stays fixed the whole time. So the map/3D marker tracks the real off-centre ground
   // point under the cursor (computed via hoverFrame, the same perpendicular frame this station was
@@ -5816,6 +5872,25 @@ function renderCrossSectionChart(xsPoints, stationDist, wrap, tooltip){
     xsChartPanState = { startClientX: ev.clientX, startMin: xMin, startMax: xMax, w, pad, fullMin, fullMax };
   });
   svg.addEventListener('dblclick', () => { xsChartXView = null; refreshXsCharts(); });
+
+  // Click-to-pin - real browser 'click' semantics already only fire on a genuine stationary click,
+  // not the pan-drag mousedown/mousemove above, so this needs no separate threshold check of its
+  // own (same reasoning as the Elevation Profile chart's click handler).
+  svg.addEventListener('click', (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    if(mx < pad.l || mx > w - pad.r) return;
+    const o = xMin + (mx - pad.l) / (w - pad.l - pad.r) * (xMax - xMin);
+    let nearest = null, best = Infinity;
+    for(const p of xsPoints){
+      if(p.elev == null) continue;
+      const diff = Math.abs(p.offset - o);
+      if(diff < best){ best = diff; nearest = p; }
+    }
+    if(!nearest) return;
+    xsChartPin = { offset: nearest.offset, elev: nearest.elev };
+    refreshXsCharts();
+  });
 
   wrap.appendChild(svg);
   return xsAreaResult;
