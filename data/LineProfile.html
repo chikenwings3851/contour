@@ -785,6 +785,20 @@
       </div>
     </div>
 
+    <div class="card">
+      <h2>Municipal Drains</h2>
+      <div class="datum-note" style="margin:0 0 6px;">Load a municipal drain straight from Ontario's open Constructed Drain data — no login or token needed.</div>
+      <div class="search-wrap">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input type="text" id="drainSearchBox" placeholder="Search a drain by name…" autocomplete="off">
+        <div id="drainSearchResults" class="search-results" hidden></div>
+      </div>
+      <label class="datum-note" style="display:flex;align-items:center;gap:6px;margin:6px 0 0;cursor:pointer;">
+        <input type="checkbox" id="drainSearchThisView" checked style="width:auto;margin:0;">
+        Only search drains in the current map view (names repeat across Ontario)
+      </label>
+    </div>
+
     <div class="card collapsed" id="importSaveCard">
       <div class="card-head collapsible">
         <h2>Import &amp; Save</h2>
@@ -802,17 +816,6 @@
         </button>
         <input type="file" id="dxfFileInput" accept=".dxf,.geojson,.json,.kml,.kmz,.zip,.shp,.prj,.dbf,.shx" multiple style="display:none;">
       </div>
-      <div class="subsection-label">Municipal Drains</div>
-      <div class="datum-note" style="margin:0 0 6px;">Load a municipal drain straight from Ontario's open Constructed Drain data — no login or token needed.</div>
-      <div class="search-wrap">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <input type="text" id="drainSearchBox" placeholder="Search a drain by name…" autocomplete="off">
-        <div id="drainSearchResults" class="search-results" hidden></div>
-      </div>
-      <label class="datum-note" style="display:flex;align-items:center;gap:6px;margin:6px 0 0;cursor:pointer;">
-        <input type="checkbox" id="drainSearchThisView" checked style="width:auto;margin:0;">
-        Only search drains in the current map view (names repeat across Ontario)
-      </label>
       <div class="subsection-label">Project File</div>
       <div class="row">
         <button id="btnSaveProject" title="Save this line, profile, and design grade to a file you can reopen later" disabled>
