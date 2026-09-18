@@ -793,10 +793,6 @@
         <input type="text" id="drainSearchBox" placeholder="Search a drain by name…" autocomplete="off">
         <div id="drainSearchResults" class="search-results" hidden></div>
       </div>
-      <label class="datum-note" style="display:flex;align-items:center;gap:6px;margin:6px 0 0;cursor:pointer;">
-        <input type="checkbox" id="drainSearchThisView" checked style="width:auto;margin:0;">
-        Only search drains in the current map view (names repeat across Ontario)
-      </label>
     </div>
 
     <div class="card collapsed" id="importSaveCard">
@@ -1709,6 +1705,10 @@ function groupDrainFeatures(features){
   return [...byName.values()].sort((a,b) => a.name.localeCompare(b.name));
 }
 
+// Always searches all of Ontario - a current-map-view filter used to be optional here, but a
+// municipal drain name search is rare enough (and drain names repeat often enough across the
+// province) that narrowing to whatever's currently on screen did more harm than good as a default,
+// so it was removed rather than left as a toggle.
 function drainQueryParams(q, withGeometry){
   // Escaped for a SQL string literal - a drain name legitimately contains apostrophes ("O'Brien
   // Drain"), and an unescaped one would both break the query and be an injection hole.
@@ -1722,21 +1722,13 @@ function drainQueryParams(q, withGeometry){
   });
   if(withGeometry) params.set('geometryPrecision', '6');
   else params.set('resultRecordCount', '300');
-  if(document.getElementById('drainSearchThisView').checked){
-    const b = map.getBounds();
-    params.set('geometry', [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(','));
-    params.set('geometryType', 'esriGeometryEnvelope');
-    params.set('inSR', '4326');
-    params.set('spatialRel', 'esriSpatialRelIntersects');
-  }
   return params;
 }
 
 function renderDrainResults(){
   if(!drainResults.length){
     drainSearchResultsEl.hidden = false;
-    drainSearchResultsEl.innerHTML = '<div class="search-result-item"><span class="sr-sub">No drains found' +
-      (document.getElementById('drainSearchThisView').checked ? ' in this map view — try unchecking the view filter, or pan to the right area.' : ' in Ontario.') + '</span></div>';
+    drainSearchResultsEl.innerHTML = '<div class="search-result-item"><span class="sr-sub">No drains found in Ontario.</span></div>';
     return;
   }
   drainSearchResultsEl.hidden = false;
