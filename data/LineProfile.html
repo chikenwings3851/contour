@@ -2403,6 +2403,23 @@ async function runProfile(){
     chartXView = null;
     chartMeasure = null;
     chartPin = null;
+
+    // Downstream (the lower end) always belongs on the left (station 0), regardless of which end
+    // was actually clicked/drawn first or which end a CAD/GeoJSON/drain-reach import happened to
+    // start from. Compares the nearest VALID elevation at each end (not just index 0/last, which
+    // could be a coverage gap) - if the line runs high-to-low as drawn, both the raw fetched points
+    // and the underlying `vertices` are reversed together here, before anything else (the drawn
+    // polyline, edit handles, corridor/3D, CSV/PDF export, cross-section stationing...) reads
+    // either one, so every consumer agrees on the same direction rather than just the chart.
+    const firstValidElev = allPoints.find(p => p.elev != null);
+    const lastValidElev = [...allPoints].reverse().find(p => p.elev != null);
+    let reversed = false;
+    if(firstValidElev && lastValidElev && firstValidElev.elev > lastValidElev.elev){
+      allPoints = allPoints.slice().reverse();
+      vertices = vertices.slice().reverse();
+      reversed = true;
+    }
+
     let cum = 0, prev = null;
     profile = allPoints.map(s => {
       if(prev) cum += haversine(prev.lat, prev.lon, s.lat, s.lon);
@@ -2414,6 +2431,7 @@ async function runProfile(){
     if(validCount === 0) throw new Error('No valid elevation values along this line (outside LiDAR coverage).');
 
     const notes = [];
+    if(reversed) notes.push('direction reversed so downstream (the lower end) is on the left');
     if(validCount < profile.length) notes.push((profile.length - validCount) + ' gaps, no data');
     if(failedChunks > 0) notes.push(failedChunks + ' of ' + chunkCount + ' segments could not be retrieved after retrying — the elevation service was intermittently unavailable');
     finalizeProfile(length, myRequestId, 'Profile built from <b>' + profile.length + '</b> sample points' + (notes.length ? ' (' + notes.join('; ') + ')' : '') + '. Hover the line to track a station. Draw a new line, or Clear.');
