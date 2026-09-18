@@ -239,6 +239,7 @@
   }
   #status b{color:var(--text);font-weight:700;}
   #status.err{color:var(--danger);}
+  #gradeImportPreview.err{color:var(--danger);}
   .spinner{
     display:inline-block;width:12px;height:12px;flex:none;
     border:2px solid var(--border-strong);border-top-color:var(--accent);
@@ -371,6 +372,12 @@
   .grade-point-row input[type=number]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
   .grade-point-row .gp-sta{font-size:9.5px;color:var(--text-faint);margin-top:2px;}
   .grade-point-row button{padding:6px;flex:none;}
+  #gradeImportText{
+    width:100%;font-family:var(--font-mono);font-size:12.5px;color:var(--text);
+    background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;
+    padding:10px 12px;resize:vertical;line-height:1.5;box-sizing:border-box;
+  }
+  #gradeImportText:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
   .grade-connector{display:flex;align-items:center;gap:7px;padding:3px 6px 3px 32px;}
   .gc-line{flex:1;height:1px;background:var(--border-strong);}
   .gc-badge{
@@ -996,10 +1003,16 @@
           <span class="legend-item"><span class="legend-dot" style="background:#e0483e"></span>Below min cover</span>
         </div>
         <div id="gradePointsList"></div>
-        <button id="btnAddGradePoint" style="width:100%;justify-content:center;margin-top:8px;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          Add Grade Break Point
-        </button>
+        <div class="row" style="margin-top:8px;">
+          <button id="btnAddGradePoint" style="flex:1;justify-content:center;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            Add Grade Break Point
+          </button>
+          <button id="btnOpenGradeImport" style="flex:1;justify-content:center;" title="Paste station/elevation data copied from Excel - replaces the current break points">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 3v13m0 0l-4-4m4 4l4-4M5 20h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Import from Text
+          </button>
+        </div>
         <div class="row" style="margin-top:12px;">
           <div class="gp-field">
             <label>Bottom Width (m)</label>
@@ -1024,6 +1037,32 @@
         <div class="stats-grid" id="cutFillStats" style="margin-top:12px;"></div>
         <div class="datum-note" id="cutFillPrecisionNote"></div>
         <div class="resize-handle" id="gradeResizeHandle" title="Drag to resize"></div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="gradeImportModal">
+      <div class="modal-panel" style="width:min(600px,92vw);max-height:80vh;">
+        <div class="shortcuts-head">
+          <h3>Import Design Grade</h3>
+          <button id="btnCloseGradeImport" class="icon-btn">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="datum-note" style="margin:2px 0 10px;">
+          Paste station/elevation data copied straight from Excel - this replaces the current break points.
+          One point per line ("station elevation"), one pipe segment per line ("startSta startElev endSta
+          endElev"), or a full invert + pipe top table ("invStartSta invStartElev invEndSta invEndElev
+          topStartSta topStartElev topEndSta topEndElev") - the pipe top columns are used to work out the
+          diameter at each segment automatically.
+        </div>
+        <textarea id="gradeImportText" placeholder="0 317&#10;6.01 317.009&#10;32.01 317.048&#10;..." rows="10"></textarea>
+        <div class="datum-note" id="gradeImportPreview" style="margin:8px 0 0;"></div>
+        <div class="row" style="margin-top:12px;">
+          <button id="btnGradeImportApply" class="primary" style="width:100%;justify-content:center;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Import
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1371,7 +1410,43 @@ function currentSideSlope(){ return Math.max(0, parseFloat(document.getElementBy
 // display toggle, exactly like the bottom-width/side-slope inputs above them.
 function currentPipeOD(){ return Math.max(0, parseFloat(document.getElementById('pipeDia').value) || 0) / 1000; }
 function currentMinCover(){ return Math.max(0, parseFloat(document.getElementById('minCover').value) || 0); }
-function coverCheckActive(){ return !!designGrade && currentPipeOD() > 0; }
+
+// A real pipe design often changes diameter segment to segment (bigger downstream as more area
+// drains in) - each design grade point can optionally carry its own `dia` (mm, same unit as the
+// Pipe Ø field), meaning "the diameter of the segment FROM this point to the next one". A point
+// with no `dia` set (the common case - nobody importing per-segment sizes) falls back to the single
+// global Pipe Ø field, so every existing simple/uniform-diameter design keeps working unchanged.
+function anyPipeDiameterSet(){
+  if(currentPipeOD() > 0) return true;
+  return !!(designGrade && designGrade.points.some(p => p.dia != null && p.dia > 0));
+}
+function coverCheckActive(){ return !!designGrade && anyPipeDiameterSet(); }
+// Index of the segment (points[i] -> points[i+1]) a station falls in, clamped to the first/last
+// segment outside the grade's own range - matches how designElevAt() already extrapolates past the
+// first/last point, so diameter and elevation agree on what "past the end" means.
+function designSegmentIndexAt(dist){
+  const pts = designGrade.points;
+  if(pts.length < 2) return -1;
+  if(dist <= pts[0].dist) return 0;
+  if(dist >= pts[pts.length-1].dist) return pts.length - 2;
+  for(let i=0;i<pts.length-1;i++){
+    if(dist >= pts[i].dist && dist <= pts[i+1].dist) return i;
+  }
+  return pts.length - 2;
+}
+// Diameter (metres) of one specific segment, by index - the point-level fallback-to-global logic
+// lives here so every caller (pipeODAt, and pipeBandPath's explicit before/after step) shares it.
+function segmentDiaM(idx){
+  const pts = designGrade.points;
+  if(idx < 0 || idx >= pts.length - 1) return currentPipeOD();
+  const dia = pts[idx].dia;
+  return (dia != null && dia > 0) ? dia / 1000 : currentPipeOD();
+}
+// Pipe outside diameter (metres) in effect at a given station.
+function pipeODAt(dist){
+  if(!designGrade || designGrade.points.length < 2) return currentPipeOD();
+  return segmentDiaM(designSegmentIndexAt(dist));
+}
 
 function fmtDist(m){
   if(unitSystem === 'imperial'){
@@ -5961,8 +6036,72 @@ function renderStats(prof, length){
 // compared against the actual ground profile everywhere: STA 0+000 to the end, in the 2D chart,
 // the 3D view, and the cross-sections.
 
-let designGrade = null; // { points: [{id, dist, elev}, ...] } sorted ascending by dist, or null
+let designGrade = null; // { points: [{id, dist, elev, dia}, ...] } sorted ascending by dist, or null - dia (mm) is optional, see pipeODAt
 let designGradeNextId = 1;
+
+// Parses station/elevation data pasted straight from Excel into design grade break points (see the
+// Import Design Grade panel). Three shapes are auto-detected from how many numbers the MODE data
+// line contains, so one stray line doesn't derail detection:
+//   2 numbers/line -> one POINT per line: station, elevation
+//   4 numbers/line -> one pipe SEGMENT per line: invert start (sta, elev), invert end (sta, elev)
+//   8 numbers/line -> as above, plus pipe TOP start/end (sta, elev) - the top-minus-invert
+//                     difference becomes that segment's diameter (mm, matching the Pipe Ø field)
+// Segment shapes (4/8) build points by walking every line in order and merging each line's "end"
+// point into the NEXT line's "start" point when they're within GRADE_IMPORT_MERGE_TOL_M - the real
+// convention behind the sample this was built for: a structure (manhole) shared by two consecutive
+// segments shows up as e.g. "6" ending one and "6.01" starting the next - the same real location,
+// not two separate points 1cm apart.
+const GRADE_IMPORT_MERGE_TOL_M = 0.05;
+function parseDesignGradeText(text){
+  const NUM = /-?\d+(?:\.\d+)?/g;
+  const lineNums = text.split(/\r\n|\r|\n/)
+    .map(line => (line.match(NUM) || []).map(Number))
+    .filter(nums => nums.length > 0);
+  if(!lineNums.length) throw new Error('no numeric data found - paste station/elevation pairs, one line per point or per segment');
+
+  const counts = {};
+  lineNums.forEach(nums => { counts[nums.length] = (counts[nums.length]||0) + 1; });
+  const shape = Object.keys(counts).map(Number).sort((a,b) => counts[b]-counts[a])[0];
+  if(![2,4,8].includes(shape)){
+    throw new Error('each line should have 2 numbers (station, elevation), 4 (a segment\'s start/end), or 8 (segment start/end + pipe top start/end) - most lines here have ' + shape);
+  }
+  const skipped = lineNums.filter(n => n.length !== shape).length;
+
+  let rawPoints; // [{sta, elev, diaOut}], NOT yet merged, in file order
+  if(shape === 2){
+    rawPoints = lineNums.filter(n => n.length === 2).map(([sta, elev]) => ({ sta, elev, diaOut: null }));
+  } else {
+    rawPoints = [];
+    lineNums.filter(n => n.length === shape).forEach(nums => {
+      const [staA, elevA, staB, elevB] = nums;
+      let diaOut = null;
+      if(shape === 8){
+        const [, , , , topStaA, topElevA, topStaB, topElevB] = nums;
+        // Averaged rather than trusting one end - real data can disagree by a hair between its two
+        // ends (rounding upstream in the spreadsheet), and this only labels the segment.
+        diaOut = Math.round(((topElevA - elevA) + (topElevB - elevB)) / 2 * 1000); // m -> mm
+      }
+      rawPoints.push({ sta: staA, elev: elevA, diaOut });
+      rawPoints.push({ sta: staB, elev: elevB, diaOut: null }); // this end starts nothing by itself; a later merge may still give it one
+    });
+  }
+
+  const merged = [];
+  rawPoints.forEach(p => {
+    const last = merged[merged.length-1];
+    if(last && Math.abs(p.sta - last.sta) <= GRADE_IMPORT_MERGE_TOL_M){
+      last.elev = (last.elev + p.elev) / 2;
+      if(p.diaOut != null) last.diaOut = p.diaOut;
+    } else {
+      merged.push({ ...p });
+    }
+  });
+  if(merged.length < 2) throw new Error('need at least 2 distinct stations to build a grade');
+
+  merged.sort((a,b) => a.sta - b.sta);
+  const points = merged.map(p => ({ id: designGradeNextId++, dist: p.sta, elev: p.elev, dia: p.diaOut }));
+  return { points, shape, skipped };
+}
 
 // Registered exactly once, ever - the chart re-renders on every drag tick (rebuilding fresh
 // handle elements, and a fresh <svg>, each time), so drag tracking lives here instead of being
@@ -6108,10 +6247,15 @@ function computeChartYRange(prof, xMinM, xMaxM){
     [designElevAt(xMinM), designElevAt(xMaxM)].forEach(e => { if(e < realMin) realMin = e; if(e > realMax) realMax = e; });
     // The pipe crown and the required-cover line sit above the design invert, and on a shallow pipe
     // under low ground they can sit above the ground line too - include them or the cover check's own
-    // lines get drawn outside the plot area, which is exactly where they matter most.
-    const od = currentPipeOD();
-    if(od > 0){
-      const top = od + currentMinCover();
+    // lines get drawn outside the plot area, which is exactly where they matter most. Uses the
+    // LARGEST diameter anywhere on the line (segments can vary - see pipeODAt/segmentDiaM), not just
+    // the global Pipe Ø field, so a big downstream segment isn't clipped just because a smaller one
+    // happens to sit at the line's own start/end.
+    if(anyPipeDiameterSet()){
+      const pts = designGrade.points;
+      let maxOd = currentPipeOD();
+      for(let i=0;i<pts.length-1;i++){ const d = segmentDiaM(i); if(d > maxOd) maxOd = d; }
+      const top = maxOd + currentMinCover();
       [...designGrade.points.map(p => p.elev), designElevAt(xMinM), designElevAt(xMaxM)]
         .forEach(e => { if(e + top > realMax) realMax = e + top; });
     }
@@ -6178,14 +6322,16 @@ function splitCutFillRuns(prof){
 // "nothing to check" rather than special-casing it. Purely geometric: no loading, frost-depth, or
 // bedding assumptions are made here - the required minimum is whatever the designer enters.
 function computeCoverCheck(prof){
-  if(!designGrade) return null;
-  const od = currentPipeOD();
-  if(od <= 0) return null;
+  if(!designGrade || !anyPipeDiameterSet()) return null;
   const minC = currentMinCover();
   const raw = [];
   let worst = null, cur = null;
+  let odMin = Infinity, odMax = -Infinity;
   for(const p of prof){
     if(p.elev == null){ if(cur){ raw.push(cur); cur = null; } continue; }
+    const od = pipeODAt(p.dist);
+    if(od < odMin) odMin = od;
+    if(od > odMax) odMax = od;
     const cover = p.elev - (designElevAt(p.dist) + od);
     if(!worst || cover < worst.cover) worst = { dist: p.dist, cover };
     if(cover < minC){
@@ -6212,7 +6358,7 @@ function computeCoverCheck(prof){
     else runs.push({ ...r });
   });
   const totalShortfall = runs.reduce((s, r) => s + (r.to - r.from), 0);
-  return { od, minC, runs, worst, totalShortfall };
+  return { odMin, odMax, minC, runs, worst, totalShortfall };
 }
 
 // Path builders for the cover visuals, shared by the live chart and the print/report profile so the
@@ -6224,23 +6370,44 @@ function designOffsetStations(d0, d1){
   const brk = designGrade.points.map(p => p.dist).filter(d => d > d0 && d < d1);
   return [d0, ...brk.sort((a,b) => a-b), d1];
 }
+// `offset` is either a plain number (constant, e.g. 0 for the invert itself) or a function
+// `(dist) => number` for something that varies by station, like od+minCover once diameter can
+// change per segment. Resolved at each traced station on the design's own piecewise-linear breaks,
+// same as designOffsetStations already samples elevation at.
 function designOffsetPath(d0, d1, offset, X, Y){
+  const offsetAt = typeof offset === 'function' ? offset : () => offset;
   let path = '';
   designOffsetStations(d0, d1).forEach((d, i) => {
-    path += (i === 0 ? 'M' : 'L') + X(d).toFixed(1) + ',' + Y(designElevAt(d) + offset).toFixed(1) + ' ';
+    path += (i === 0 ? 'M' : 'L') + X(d).toFixed(1) + ',' + Y(designElevAt(d) + offsetAt(d)).toFixed(1) + ' ';
   });
   return path;
 }
-// The pipe barrel itself as a closed band: along the invert one way, back along the crown the other.
-function pipeBandPath(d0, d1, od, X, Y){
+// The pipe barrel itself as a closed band: along the invert one way, back along the crown the
+// other. Diameter is looked up PER SEGMENT (pipeODAt/segmentDiaM) rather than passed in as one
+// constant, so a real design with varying pipe sizes draws as an actual step in the crown line at
+// each diameter change, not a smoothed-over average.
+function pipeBandPath(d0, d1, X, Y){
+  const pts = designGrade.points;
   const stations = designOffsetStations(d0, d1);
-  let path = '';
-  stations.forEach((d, i) => { path += (i === 0 ? 'M' : 'L') + X(d).toFixed(1) + ',' + Y(designElevAt(d)).toFixed(1) + ' '; });
-  for(let i = stations.length - 1; i >= 0; i--){
-    const d = stations[i];
-    path += 'L' + X(d).toFixed(1) + ',' + Y(designElevAt(d) + od).toFixed(1) + ' ';
+  let invertPath = '';
+  stations.forEach((d, i) => { invertPath += (i === 0 ? 'M' : 'L') + X(d).toFixed(1) + ',' + Y(designElevAt(d)).toFixed(1) + ' '; });
+
+  const crownPts = []; // {d, elev}, left to right; a real diameter change contributes TWO entries at the same d
+  stations.forEach((d, i) => {
+    const ptIdx = pts.findIndex(p => Math.abs(p.dist - d) < 1e-6);
+    const isInternalBreak = ptIdx > 0 && ptIdx < pts.length - 1 && d > d0 + 1e-6 && d < d1 - 1e-6;
+    if(isInternalBreak){
+      crownPts.push({ d, elev: designElevAt(d) + segmentDiaM(ptIdx - 1) }); // segment ending here
+      crownPts.push({ d, elev: designElevAt(d) + segmentDiaM(ptIdx) });     // segment starting here
+    } else {
+      crownPts.push({ d, elev: designElevAt(d) + pipeODAt(d) });
+    }
+  });
+  let crownPath = '';
+  for(let i = crownPts.length - 1; i >= 0; i--){
+    crownPath += 'L' + X(crownPts[i].d).toFixed(1) + ',' + Y(crownPts[i].elev).toFixed(1) + ' ';
   }
-  return path + 'Z';
+  return invertPath + crownPath + 'Z';
 }
 
 // Trapezoidal channel/trench cross-section (flat bottom + two side slopes expressed as a
@@ -6437,6 +6604,44 @@ document.getElementById('btnAddGradePoint').addEventListener('click', () => {
   renderGradeEditor();
   refreshChart();
 });
+document.getElementById('btnOpenGradeImport').addEventListener('click', () => {
+  document.getElementById('gradeImportText').value = '';
+  const preview = document.getElementById('gradeImportPreview');
+  preview.className = 'datum-note';
+  preview.textContent = '';
+  document.getElementById('gradeImportModal').style.display = 'block';
+  // Without this, this modal keeps the SAME default z-index (1000) that gradeModal itself started
+  // at before being opened - and openGradeModal() already bumped gradeModal above that via its own
+  // bringToFront() call, so gradeModal's (empty-space) panel visually sits on top and silently
+  // swallows clicks meant for this modal's own buttons underneath it, despite both being
+  // technically "open". Bump this one to the front too, same mechanism every other floating panel
+  // already uses.
+  bringToFront(document.querySelector('#gradeImportModal .modal-panel'));
+});
+document.getElementById('btnCloseGradeImport').addEventListener('click', () => {
+  document.getElementById('gradeImportModal').style.display = 'none';
+});
+document.getElementById('btnGradeImportApply').addEventListener('click', () => {
+  if(!designGrade) return;
+  const text = document.getElementById('gradeImportText').value;
+  const preview = document.getElementById('gradeImportPreview');
+  try{
+    const result = parseDesignGradeText(text);
+    designGrade.points = result.points;
+    document.getElementById('gradeImportModal').style.display = 'none';
+    renderGradeEditor(); // also re-renders cut/fill stats + the cover note
+    refreshChart();
+    refreshXsCharts();
+    const shapeLabel = result.shape === 8 ? 'invert + pipe top' : (result.shape === 4 ? 'invert segments' : 'points');
+    const diaCount = result.points.filter(p => p.dia != null).length;
+    showToast('Imported ' + result.points.length + ' break points (' + shapeLabel + ')' +
+      (diaCount ? ', ' + diaCount + ' with a per-segment diameter' : '') +
+      (result.skipped ? ' — ' + result.skipped + ' line(s) skipped (didn\'t match the detected shape)' : '') + '.');
+  } catch(err){
+    preview.className = 'datum-note err';
+    preview.textContent = 'Import failed: ' + err.message;
+  }
+});
 document.getElementById('bottomWidth').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 document.getElementById('sideSlope').addEventListener('change', () => { if(designGrade) renderCutFillStats(); });
 // Cover inputs change the chart itself (pipe barrel, crown, required-cover line), not just a stat -
@@ -6452,13 +6657,21 @@ function renderGradeEditor(){
   if(!designGrade) return;
   const list = document.getElementById('gradePointsList');
   const pts = designGrade.points;
+  // The per-point Pipe Ø field only appears once a design actually HAS per-segment diameters (a
+  // text import) - otherwise every row would carry a field almost nobody uses, when the single
+  // Pipe Ø field below already covers the ordinary "one size for the whole line" case.
+  const showPerSegDia = pts.some(p => p.dia != null);
   let html = '';
   pts.forEach((pt, i) => {
+    const diaField = (showPerSegDia && i < pts.length - 1)
+      ? '<div class="gp-field" style="flex:0.75;"><label>Pipe Ø (mm)</label><input type="number" class="gp-dia" step="25" min="0" value="' + (pt.dia != null ? pt.dia : '') + '" placeholder="global"></div>'
+      : '';
     html +=
       '<div class="grade-point-row" data-idx="' + i + '">' +
         '<div class="gp-index">' + (i+1) + '</div>' +
         '<div class="gp-field"><label>Station (m)</label><input type="number" class="gp-dist" step="1" value="' + pt.dist.toFixed(1) + '"><div class="gp-sta">' + fmtStation(pt.dist) + '</div></div>' +
         '<div class="gp-field"><label>Elevation (' + (unitSystem==='imperial'?'ft':'m') + ')</label><input type="number" class="gp-elev" step="0.1" value="' + elevValue(pt.elev).toFixed(2) + '"></div>' +
+        diaField +
         (pts.length > 2 ? '<button class="gp-remove" title="Remove point"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>' : '') +
       '</div>';
     // Read-only grade % between THIS point and the next - the number a civil designer actually
@@ -6506,6 +6719,15 @@ function renderGradeEditor(){
       renderCutFillStats();
       refreshChart();
     });
+    const diaInput = row.querySelector('.gp-dia');
+    if(diaInput) diaInput.addEventListener('change', (e) => {
+      // Blank means "use the global Pipe Ø field for this segment" - not zero, which would mean a
+      // genuine zero-diameter pipe and switch its own cover check off for that stretch.
+      const raw = e.target.value.trim();
+      designGrade.points[idx].dia = raw === '' ? null : Math.max(0, parseFloat(raw) || 0);
+      renderCutFillStats();
+      refreshChart();
+    });
     const removeBtn = row.querySelector('.gp-remove');
     if(removeBtn) removeBtn.addEventListener('click', () => {
       designGrade.points.splice(idx, 1);
@@ -6550,8 +6772,13 @@ function renderCoverNote(){
     el.textContent = 'Pipe Ø 0 — treating the design grade as an open channel invert. Enter a pipe diameter to check minimum cover against the real ground.';
     return;
   }
-  const dia = Math.round(cover.od * 1000);
-  const head = 'Pipe Ø ' + dia + ' mm · crown at invert + ' + fmtElev(cover.od) + ' · min cover ' + fmtElev(cover.minC) + '. ';
+  // A uniform diameter (the common case - no per-segment sizes set) reports the same single-value
+  // phrasing as before; a real varying-diameter design (from a text import) reports the range
+  // instead, since "crown at invert + X" isn't one number anymore.
+  const diaText = (cover.odMax - cover.odMin < 0.001)
+    ? Math.round(cover.odMin * 1000) + ' mm · crown at invert + ' + fmtElev(cover.odMin)
+    : Math.round(cover.odMin * 1000) + '–' + Math.round(cover.odMax * 1000) + ' mm (varies by segment)';
+  const head = 'Pipe Ø ' + diaText + ' · min cover ' + fmtElev(cover.minC) + '. ';
   const least = cover.worst ? 'Least cover ' + fmtElev(cover.worst.cover) + ' @ ' + fmtStation(cover.worst.dist) + '.' : '';
   if(!cover.runs.length){
     el.textContent = head + 'Cover met for the whole length. ' + least;
@@ -6829,7 +7056,7 @@ function renderChartInto(prof, wrap, tooltip, expanded){
     const cover = computeCoverCheck(prof);
     if(cover){
       const band = document.createElementNS(NS,'path');
-      band.setAttribute('d', pipeBandPath(xMinM, xMaxM, cover.od, X, Y));
+      band.setAttribute('d', pipeBandPath(xMinM, xMaxM, X, Y));
       band.setAttribute('fill', 'rgba(194,102,10,0.22)');
       band.setAttribute('stroke', '#c2660a');
       band.setAttribute('stroke-width', '1');
@@ -6840,7 +7067,7 @@ function renderChartInto(prof, wrap, tooltip, expanded){
       // the violating stretches are re-drawn in red on top rather than left to be eyeballed.
       if(cover.minC > 0){
         const reqLine = document.createElementNS(NS,'path');
-        reqLine.setAttribute('d', designOffsetPath(xMinM, xMaxM, cover.od + cover.minC, X, Y));
+        reqLine.setAttribute('d', designOffsetPath(xMinM, xMaxM, d => pipeODAt(d) + cover.minC, X, Y));
         reqLine.setAttribute('fill', 'none');
         reqLine.setAttribute('stroke', '#6b7080');
         reqLine.setAttribute('stroke-width', '1.5');
@@ -6851,7 +7078,7 @@ function renderChartInto(prof, wrap, tooltip, expanded){
           const from = Math.max(run.from, xMinM), to = Math.min(run.to, xMaxM);
           if(to <= from) return;
           const bad = document.createElementNS(NS,'path');
-          bad.setAttribute('d', designOffsetPath(from, to, cover.od + cover.minC, X, Y));
+          bad.setAttribute('d', designOffsetPath(from, to, d => pipeODAt(d) + cover.minC, X, Y));
           bad.setAttribute('fill', 'none');
           bad.setAttribute('stroke', '#e0483e');
           bad.setAttribute('stroke-width', '3');
